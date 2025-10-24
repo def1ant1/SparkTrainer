@@ -1,0 +1,463 @@
+import React, { useEffect, useMemo, useState } from 'react';
+
+export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
+  const [step, setStep] = useState(0);
+  const [jobType, setJobType] = useState('train');
+  const [framework, setFramework] = useState('pytorch');
+  const [arch, setArch] = useState('custom');
+  const [preset, setPreset] = useState('');
+  const [name, setName] = useState('');
+  const [errors, setErrors] = useState([]);
+  const [warnings, setWarnings] = useState([]);
+  const [validating, setValidating] = useState(false);
+  const [gpuMode, setGpuMode] = useState('auto');
+  const [gpuAutoPrefer, setGpuAutoPrefer] = useState('mig_first');
+  const [gpuSelection, setGpuSelection] = useState('');
+
+  // Data config
+  const [dataSource, setDataSource] = useState('local');
+  const [localPath, setLocalPath] = useState('');
+  const [hfDataset, setHfDataset] = useState('');
+  const [s3Uri, setS3Uri] = useState('');
+  const [gcsUri, setGcsUri] = useState('');
+  const [split, setSplit] = useState({ train: 0.8, val: 0.1, test: 0.1 });
+  const [augment, setAugment] = useState({ flip: true, rotate: false, normalize: true });
+  const [loader, setLoader] = useState({ num_workers: 4, prefetch: 2, pin_memory: true });
+  const [localFiles, setLocalFiles] = useState([]);
+
+  // Training config
+  const [epochs, setEpochs] = useState(10);
+  const [batchSize, setBatchSize] = useState(32);
+  const [lr, setLr] = useState(0.001);
+  const [optimizer, setOptimizer] = useState('adam');
+  const [scheduler, setScheduler] = useState('none');
+  const [amp, setAmp] = useState('none'); // none|fp16|bf16|tf32
+  const [gradAccum, setGradAccum] = useState(1);
+  const [earlyStop, setEarlyStop] = useState({ enabled: false, patience: 3 });
+  const [checkpoint, setCheckpoint] = useState({ strategy: 'best', every_epochs: 1 });
+
+  // Fine-tune specific
+  const [hfModel, setHfModel] = useState('bert-base-uncased');
+  const [freezeLayers, setFreezeLayers] = useState(false);
+  const [lora, setLora] = useState({ enabled: false, r: 8, alpha: 16, dropout: 0.05, qlora: false });
+  const [adapters, setAdapters] = useState({ method: 'none' }); // none|prefix|ptuning
+  const [quant, setQuant] = useState('none'); // none|int8|int4
+  const [gradCheckpoint, setGradCheckpoint] = useState(false);
+
+  // Architecture custom params (simple)
+  const [customArch, setCustomArch] = useState({ input_size: 784, output_size: 10, hidden_layers: '512,256,128' });
+
+  useEffect(() => {
+    if (gpuMode !== 'select') return;
+    if (gpuSelection) return;
+    let pick = '';
+    const gpus = partitions?.gpus || [];
+    for (const g of gpus) {
+      for (const inst of (g.instances||[])) {
+        if (!(inst.allocated_by_jobs||[]).length) {
+          pick = JSON.stringify({type:'mig', gpu_index:g.index, gpu_uuid:g.uuid, mig_uuid:inst.uuid});
+          break;
+        }
+      }
+      if (pick) break;
+    }
+    if (!pick && gpus.length) pick = JSON.stringify({type:'gpu', gpu_index:gpus[0].index, gpu_uuid:gpus[0].uuid});
+    setGpuSelection(pick);
+  }, [gpuMode, partitions]);
+
+  const presets = useMemo(() => ({
+    imagenet: {
+      framework: 'pytorch', arch: 'resnet', epochs: 90, batchSize: 256, lr: 0.1,
+      data: { source: 'local', augment: { flip: true, normalize: true }, loader: { num_workers: 8, pin_memory: true } }
+    },
+    bert_cls: {
+      framework: 'huggingface', arch: 'transformer', model: 'bert-base-uncased', epochs: 3, batchSize: 16, lr: 2e-5,
+      data: { source: 'huggingface', dataset_name: 'imdb' }
+    },
+    gpt2_ft: {
+      framework: 'huggingface', arch: 'transformer', model: 'gpt2', epochs: 3, batchSize: 8, lr: 5e-5,
+      data: { source: 'huggingface', dataset_name: 'wikitext' }
+    }
+  }), []);
+
+  const applyPreset = (key) => {
+    const p = presets[key];
+    if (!p) return;
+    setFramework(p.framework);
+    setArch(p.arch);
+    if (p.model) setHfModel(p.model);
+    setEpochs(p.epochs);
+    setBatchSize(p.batchSize);
+    setLr(p.lr);
+    if (p.data) {
+      if (p.data.source) setDataSource(p.data.source);
+      if (p.data.dataset_name) setHfDataset(p.data.dataset_name);
+      if (p.data.augment) setAugment(a => ({...a, ...p.data.augment}));
+      if (p.data.loader) setLoader(l => ({...l, ...p.data.loader}));
+    }
+    setPreset(key);
+  };
+
+  const next = () => setStep(s => Math.min(4, s+1));
+  const back = () => setStep(s => Math.max(0, s-1));
+
+  const buildConfig = () => {
+    const cfg = {
+      architecture: arch,
+      epochs, batch_size: batchSize, learning_rate: lr,
+      optimizer, scheduler,
+      mixed_precision: amp,
+      gradient_accumulation_steps: gradAccum,
+      early_stopping: earlyStop,
+      checkpoint: checkpoint,
+      data: {
+        source: dataSource,
+        local_path: dataSource==='local'?localPath:undefined,
+        dataset_name: dataSource==='huggingface'?hfDataset:undefined,
+        s3_uri: dataSource==='s3'?s3Uri:undefined,
+        gcs_uri: dataSource==='gcs'?gcsUri:undefined,
+        split,
+        augment,
+        loader,
+      },
+    };
+    if (framework === 'huggingface') {
+      cfg.model_name = hfModel;
+      cfg.freeze_layers = freezeLayers;
+      cfg.lora = lora;
+      cfg.adapters = adapters;
+      cfg.quantization = quant;
+      cfg.gradient_checkpointing = gradCheckpoint;
+    }
+    if (framework === 'pytorch' && arch === 'custom') {
+      cfg.input_size = customArch.input_size;
+      cfg.output_size = customArch.output_size;
+      cfg.hidden_layers = customArch.hidden_layers.split(',').map(s=>parseInt(s.trim())).filter(Boolean);
+    }
+    return cfg;
+  };
+
+  const onSubmit = async () => {
+    setErrors([]); setWarnings([]); setValidating(true);
+    const payload = {
+      name: name || undefined,
+      type: jobType,
+      framework,
+      config: buildConfig(),
+      ...(gpuMode==='auto' ? { gpu_prefer: gpuAutoPrefer } : {}),
+      ...(gpuMode==='select' && gpuSelection ? { gpu: JSON.parse(gpuSelection) } : {}),
+    };
+    try {
+      const v = await api.validateJob(payload);
+      if (!v.ok) {
+        setErrors(v.errors||[]); setWarnings(v.warnings||[]); setValidating(false);
+        return;
+      }
+      const res = await api.createJob(payload);
+      setValidating(false);
+      alert(`Job created: ${res.id}`);
+      onNavigate('jobs');
+    } catch (e) {
+      setValidating(false);
+      setErrors([String(e.message||e)]);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold">New Training Job (Wizard)</h1>
+        <button onClick={()=>onNavigate('dashboard')} className="text-primary hover:brightness-110">← Dashboard</button>
+      </div>
+
+      {/* Stepper */}
+      <div className="flex items-center gap-3 text-sm">
+        {['Framework','Architecture','Data','Training','Review'].map((t,i)=>(
+          <div key={i} className={`px-3 py-1 rounded ${step===i?'bg-primary text-on-primary':'bg-muted'}`}>{i+1}. {t}</div>
+        ))}
+      </div>
+
+      {/* Step content */}
+      {step===0 && (
+        <div className="bg-surface p-6 rounded-lg shadow-md border border-border space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-semibold mb-2">Job Type</label>
+              <select value={jobType} onChange={e=>setJobType(e.target.value)} className="w-full border border-border rounded px-3 py-2 bg-surface">
+                <option value="train">Train from scratch</option>
+                <option value="finetune">Fine-tune</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold mb-2">Framework</label>
+              <select value={framework} onChange={e=>setFramework(e.target.value)} className="w-full border border-border rounded px-3 py-2 bg-surface">
+                <option value="pytorch">PyTorch</option>
+                <option value="huggingface">Hugging Face</option>
+                <option value="tensorflow">TensorFlow</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold mb-2">Preset Templates</label>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={()=>applyPreset('imagenet')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">ImageNet (ResNet)</button>
+              <button onClick={()=>applyPreset('bert_cls')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">BERT Fine-tune</button>
+              <button onClick={()=>applyPreset('gpt2_ft')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">GPT-2 Fine-tune</button>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2"><button onClick={next} className="px-4 py-2 bg-primary text-on-primary rounded">Next</button></div>
+        </div>
+      )}
+
+      {step===1 && (
+        <div className="bg-surface p-6 rounded-lg shadow-md border border-border space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {['custom','resnet','transformer'].map(a => (
+              <button key={a} onClick={()=>setArch(a)} className={`p-4 border border-border rounded ${arch===a?'ring-2 ring-primary/40':''}`}>
+                <div className="font-semibold capitalize mb-2">{a}</div>
+                {/* Simple diagram */}
+                {a==='custom' && <div className="h-24 bg-gradient-to-b from-gray-100 to-gray-200 rounded flex items-center justify-center">MLP</div>}
+                {a==='resnet' && <div className="h-24 bg-gradient-to-b from-gray-100 to-gray-200 rounded flex items-center justify-center">Conv ↔ Residual</div>}
+                {a==='transformer' && <div className="h-24 bg-gradient-to-b from-gray-100 to-gray-200 rounded flex items-center justify-center">Attention Blocks</div>}
+              </button>
+            ))}
+          </div>
+
+          {framework==='pytorch' && arch==='custom' && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div><label className="text-sm">Input Size</label><input type="number" className="w-full border rounded px-3 py-2" value={customArch.input_size} onChange={e=>setCustomArch({...customArch, input_size: parseInt(e.target.value)})}/></div>
+              <div><label className="text-sm">Output Size</label><input type="number" className="w-full border rounded px-3 py-2" value={customArch.output_size} onChange={e=>setCustomArch({...customArch, output_size: parseInt(e.target.value)})}/></div>
+              <div><label className="text-sm">Hidden Layers</label><input type="text" className="w-full border rounded px-3 py-2" value={customArch.hidden_layers} onChange={e=>setCustomArch({...customArch, hidden_layers: e.target.value})}/></div>
+            </div>
+          )}
+
+          {framework==='huggingface' && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-2"><label className="text-sm">Base Model</label><input className="w-full border rounded px-3 py-2" value={hfModel} onChange={e=>setHfModel(e.target.value)} placeholder="bert-base-uncased, gpt2, ..."/></div>
+              <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={freezeLayers} onChange={e=>setFreezeLayers(e.target.checked)}/> Freeze Layers</label></div>
+            </div>
+          )}
+
+          <div className="flex justify-between">
+            <button onClick={back} className="px-4 py-2 border rounded">Back</button>
+            <button onClick={next} className="px-4 py-2 bg-blue-600 text-white rounded">Next</button>
+          </div>
+        </div>
+      )}
+
+      {step===2 && (
+        <div className="bg-surface p-6 rounded-lg shadow-md border border-border space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-semibold mb-2">Data Source</label>
+              <select className="w-full border border-border rounded px-3 py-2 bg-surface" value={dataSource} onChange={e=>setDataSource(e.target.value)}>
+                <option value="local">Local Path</option>
+                <option value="huggingface">Hugging Face Dataset</option>
+                <option value="s3">S3</option>
+                <option value="gcs">GCS</option>
+              </select>
+            </div>
+            {dataSource==='local' && (
+              <div className="md:col-span-2">
+                <label className="text-sm">Local Path (server-visible)</label>
+                <input className="w-full border rounded px-3 py-2" value={localPath} onChange={e=>setLocalPath(e.target.value)} placeholder="./data/imagenet"/>
+                <div className="mt-2 text-xs text-text/70">Optional preview from browser: <input type="file" directory="" webkitdirectory="" multiple onChange={e=>setLocalFiles(Array.from(e.target.files||[]).map(f=>f.name).slice(0,5))} /></div>
+                {localFiles.length>0 && (<div className="text-xs text-text/70 mt-1">Preview: {localFiles.join(', ')}</div>)}
+              </div>
+            )}
+            {dataSource==='huggingface' && (
+              <div className="md:col-span-2"><label className="text-sm">Dataset Name</label><input className="w-full border border-border rounded px-3 py-2 bg-surface" value={hfDataset} onChange={e=>setHfDataset(e.target.value)} placeholder="imdb, ag_news, ..."/></div>
+            )}
+            {dataSource==='s3' && (
+              <div className="md:col-span-2"><label className="text-sm">S3 URI</label><input className="w-full border border-border rounded px-3 py-2 bg-surface" value={s3Uri} onChange={e=>setS3Uri(e.target.value)} placeholder="s3://bucket/prefix"/></div>
+            )}
+            {dataSource==='gcs' && (
+              <div className="md:col-span-2"><label className="text-sm">GCS URI</label><input className="w-full border border-border rounded px-3 py-2 bg-surface" value={gcsUri} onChange={e=>setGcsUri(e.target.value)} placeholder="gs://bucket/prefix"/></div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm">Split (train/val/test)</label>
+              <div className="flex gap-2 mt-1">
+                <input type="number" step="0.01" className="w-full border border-border rounded px-2 py-1 bg-surface" value={split.train} onChange={e=>setSplit({...split, train: parseFloat(e.target.value)})}/>
+                <input type="number" step="0.01" className="w-full border border-border rounded px-2 py-1 bg-surface" value={split.val} onChange={e=>setSplit({...split, val: parseFloat(e.target.value)})}/>
+                <input type="number" step="0.01" className="w-full border border-border rounded px-2 py-1 bg-surface" value={split.test} onChange={e=>setSplit({...split, test: parseFloat(e.target.value)})}/>
+              </div>
+            </div>
+            <div>
+              <label className="text-sm">Augmentations</label>
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={augment.flip} onChange={e=>setAugment({...augment, flip: e.target.checked})}/> Flip</label>
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={augment.rotate} onChange={e=>setAugment({...augment, rotate: e.target.checked})}/> Rotate</label>
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={augment.normalize} onChange={e=>setAugment({...augment, normalize: e.target.checked})}/> Normalize</label>
+              </div>
+            </div>
+            <div>
+              <label className="text-sm">Data Loader</label>
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                <label className="text-xs">Workers<input type="number" className="w-full border border-border rounded px-2 py-1 bg-surface" value={loader.num_workers} onChange={e=>setLoader({...loader, num_workers: parseInt(e.target.value)})}/></label>
+                <label className="text-xs">Prefetch<input type="number" className="w-full border border-border rounded px-2 py-1 bg-surface" value={loader.prefetch} onChange={e=>setLoader({...loader, prefetch: parseInt(e.target.value)})}/></label>
+                <label className="inline-flex items-center gap-2 col-span-2"><input type="checkbox" checked={loader.pin_memory} onChange={e=>setLoader({...loader, pin_memory: e.target.checked})}/> Pin Memory</label>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-between">
+            <button onClick={back} className="px-4 py-2 border border-border rounded bg-surface hover:bg-muted">Back</button>
+            <button onClick={next} className="px-4 py-2 bg-primary text-on-primary rounded">Next</button>
+          </div>
+        </div>
+      )}
+
+      {step===3 && (
+        <div className="bg-surface p-6 rounded-lg shadow-md border border-border space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div><label className="text-sm">Epochs</label><input type="number" className="w-full border rounded px-3 py-2" value={epochs} onChange={e=>setEpochs(parseInt(e.target.value))}/></div>
+            <div><label className="text-sm">Batch Size</label><input type="number" className="w-full border rounded px-3 py-2" value={batchSize} onChange={e=>setBatchSize(parseInt(e.target.value))}/></div>
+            <div><label className="text-sm">Learning Rate</label><input type="number" step="0.00001" className="w-full border rounded px-3 py-2" value={lr} onChange={e=>setLr(parseFloat(e.target.value))}/></div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm">Optimizer</label>
+              <select className="w-full border rounded px-3 py-2" value={optimizer} onChange={e=>setOptimizer(e.target.value)}>
+                <option value="adam">Adam</option>
+                <option value="adamw">AdamW</option>
+                <option value="sgd">SGD (momentum)</option>
+                <option value="lamb">LAMB</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-sm">Scheduler</label>
+              <select className="w-full border rounded px-3 py-2" value={scheduler} onChange={e=>setScheduler(e.target.value)}>
+                <option value="none">None</option>
+                <option value="steplr">StepLR</option>
+                <option value="cosine">CosineAnnealing</option>
+                <option value="onecycle">OneCycle</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-sm">Mixed Precision</label>
+              <select className="w-full border rounded px-3 py-2" value={amp} onChange={e=>setAmp(e.target.value)}>
+                <option value="none">None</option>
+                <option value="fp16">FP16</option>
+                <option value="bf16">BF16</option>
+                <option value="tf32">TF32</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div><label className="text-sm">Grad Accum</label><input type="number" className="w-full border rounded px-3 py-2" value={gradAccum} onChange={e=>setGradAccum(parseInt(e.target.value))}/></div>
+            <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={earlyStop.enabled} onChange={e=>setEarlyStop({...earlyStop, enabled: e.target.checked})}/> Early Stopping</label></div>
+            <div><label className="text-sm">Patience</label><input type="number" className="w-full border rounded px-3 py-2" value={earlyStop.patience} onChange={e=>setEarlyStop({...earlyStop, patience: parseInt(e.target.value)})}/></div>
+          </div>
+
+          <details className="mt-2">
+            <summary className="cursor-pointer text-sm font-semibold">Advanced Options</summary>
+            <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-sm">Checkpoint Strategy</label>
+                <select className="w-full border rounded px-3 py-2" value={checkpoint.strategy} onChange={e=>setCheckpoint({...checkpoint, strategy: e.target.value})}>
+                  <option value="best">Best only</option>
+                  <option value="every_n">Every N epochs</option>
+                </select>
+              </div>
+              {checkpoint.strategy==='every_n' && (
+                <div><label className="text-sm">Every N epochs</label><input type="number" className="w-full border rounded px-3 py-2" value={checkpoint.every_epochs} onChange={e=>setCheckpoint({...checkpoint, every_epochs: parseInt(e.target.value)})}/></div>
+              )}
+              {framework==='huggingface' && (
+                <>
+                  <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={lora.enabled} onChange={e=>setLora({...lora, enabled: e.target.checked})}/> Enable LoRA</label></div>
+                  {lora.enabled && (
+                    <div className="md:col-span-2 grid grid-cols-3 gap-2">
+                      <label className="text-xs">r<input type="number" className="w-full border rounded px-2 py-1" value={lora.r} onChange={e=>setLora({...lora, r: parseInt(e.target.value)})}/></label>
+                      <label className="text-xs">alpha<input type="number" className="w-full border rounded px-2 py-1" value={lora.alpha} onChange={e=>setLora({...lora, alpha: parseInt(e.target.value)})}/></label>
+                      <label className="text-xs">dropout<input type="number" step="0.01" className="w-full border rounded px-2 py-1" value={lora.dropout} onChange={e=>setLora({...lora, dropout: parseFloat(e.target.value)})}/></label>
+                      <label className="inline-flex items-center gap-2 col-span-3"><input type="checkbox" checked={lora.qlora} onChange={e=>setLora({...lora, qlora: e.target.checked})}/> QLoRA</label>
+                    </div>
+                  )}
+                  <div>
+                    <label className="text-sm">Adapter Method</label>
+                    <select className="w-full border rounded px-3 py-2" value={adapters.method} onChange={e=>setAdapters({method: e.target.value})}>
+                      <option value="none">None</option>
+                      <option value="prefix">Prefix Tuning</option>
+                      <option value="ptuning">P-Tuning</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm">Quantization</label>
+                    <select className="w-full border rounded px-3 py-2" value={quant} onChange={e=>setQuant(e.target.value)}>
+                      <option value="none">None</option>
+                      <option value="int8">8-bit</option>
+                      <option value="int4">4-bit</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={gradCheckpoint} onChange={e=>setGradCheckpoint(e.target.checked)}/> Gradient Checkpointing</label></div>
+                </>
+              )}
+            </div>
+          </details>
+
+          <div className="flex justify-between">
+            <button onClick={back} className="px-4 py-2 border rounded">Back</button>
+            <button onClick={next} className="px-4 py-2 bg-blue-600 text-white rounded">Next</button>
+          </div>
+        </div>
+      )}
+
+      {step===4 && (
+        <div className="bg-surface p-6 rounded-lg shadow-md border border-border space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm">Job Name</label>
+              <input className="w-full border border-border rounded px-3 py-2 bg-surface" value={name} onChange={e=>setName(e.target.value)} placeholder="My Training Job"/>
+            </div>
+            <div>
+              <label className="text-sm">Compute</label>
+              <div className="flex gap-3">
+                <label className="inline-flex items-center gap-2"><input type="radio" name="gw_gpu" checked={gpuMode==='auto'} onChange={()=>setGpuMode('auto')}/> Auto</label>
+                <label className="inline-flex items-center gap-2"><input type="radio" name="gw_gpu" checked={gpuMode==='select'} onChange={()=>setGpuMode('select')}/> Select</label>
+              </div>
+              {gpuMode==='auto' && (
+                <div className="flex gap-3 mt-2">
+                  <label className="inline-flex items-center gap-2"><input type="radio" name="gw_pref" checked={gpuAutoPrefer==='mig_first'} onChange={()=>setGpuAutoPrefer('mig_first')}/> MIG first</label>
+                  <label className="inline-flex items-center gap-2"><input type="radio" name="gw_pref" checked={gpuAutoPrefer==='gpu_first'} onChange={()=>setGpuAutoPrefer('gpu_first')}/> GPU first</label>
+                </div>
+              )}
+              {gpuMode==='select' && (
+                <select className="w-full border border-border rounded px-3 py-2 mt-2 bg-surface" value={gpuSelection} onChange={e=>setGpuSelection(e.target.value)}>
+                  <option value="">Choose...</option>
+                  {(partitions?.gpus || []).map((g) => (
+                    <option key={`g-${g.index}`} value={JSON.stringify({type:'gpu', gpu_index:g.index, gpu_uuid:g.uuid})}>{`GPU ${g.index} — ${g.name}`}</option>
+                  ))}
+                  {(partitions?.gpus || []).flatMap(g => (g.instances||[]).map((inst, k) => (
+                    <option key={`m-${g.index}-${k}`} disabled={(inst.allocated_by_jobs||[]).length>0} value={JSON.stringify({type:'mig', gpu_index:g.index, gpu_uuid:g.uuid, mig_uuid:inst.uuid})}>{`GPU ${g.index} — ${inst.profile} (MIG ${inst.device_id})${(inst.allocated_by_jobs||[]).length>0 ? ' — Allocated' : ''}`}</option>
+                  )))}
+                </select>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold">Summary</label>
+            <pre className="bg-muted p-4 rounded text-xs overflow-auto">{JSON.stringify({ name, type: jobType, framework, config: buildConfig(), gpu: (gpuMode==='select' && gpuSelection ? JSON.parse(gpuSelection) : undefined), gpu_prefer: gpuMode==='auto'?gpuAutoPrefer:undefined }, null, 2)}</pre>
+          </div>
+
+          {warnings.length>0 && (
+            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded text-sm">{warnings.join('\n')}</div>
+          )}
+          {errors.length>0 && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{errors.join('\n')}</div>
+          )}
+
+          <div className="flex justify-between items-center">
+            <button onClick={back} className="px-4 py-2 border border-border rounded bg-surface hover:bg-muted">Back</button>
+            <button disabled={validating} onClick={onSubmit} className={`px-4 py-2 rounded ${validating?'bg-muted text-text/60':'bg-primary text-on-primary hover:brightness-110'}`}>{validating?'Validating...':'Create Job'}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
