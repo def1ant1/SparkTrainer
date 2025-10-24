@@ -1,0 +1,17 @@
+/home/def1ant1/PycharmProjects/SparkTrainer/backend/venv/lib/python3.12/site-packages/transformers/utils/generic.py:441: UserWarning: torch.utils._pytree._register_pytree_node is deprecated. Please use torch.utils._pytree.register_pytree_node instead.
+  _torch_pytree._register_pytree_node(
+There was a problem when trying to write in your cache folder (/home/def1ant1/.cache/huggingface/hub). You should set the environment variable TRANSFORMERS_CACHE to a writable directory.
+Using device: cpu
+Model architecture: custom
+Total parameters: 596
+
+Starting training for 1 epochs...
+Epoch [1/1] Batch [0/8] Loss: 1.3827
+
+Epoch 1/1 Complete:
+  Average Loss: 1.3895
+  Training Accuracy: 25.00%
+
+
+Model saved to: /home/def1ant1/PycharmProjects/SparkTrainer/models/da94e667-78a1-4e1d-8866-ab4afd01aaf3
+Training completed successfully!

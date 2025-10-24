@@ -1,0 +1,27 @@
+{
+  "da94e667-78a1-4e1d-8866-ab4afd01aaf3": {
+    "id": "da94e667-78a1-4e1d-8866-ab4afd01aaf3",
+    "name": "Sanity PyTorch",
+    "type": "train",
+    "framework": "pytorch",
+    "status": "completed",
+    "created": "2025-10-24T03:59:16.876312",
+    "config": {
+      "epochs": 1,
+      "batch_size": 8,
+      "num_samples": 64,
+      "input_size": 32,
+      "output_size": 4,
+      "hidden_layers": [
+        16
+      ],
+      "architecture": "custom",
+      "learning_rate": 0.001
+    },
+    "progress": 0,
+    "metrics": {},
+    "started": "2025-10-24T03:59:16.876787",
+    "pid": 118508,
+    "completed": "2025-10-24T03:59:17.855654"
+  }
+}

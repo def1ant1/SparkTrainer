@@ -1,0 +1,29 @@
+{
+  "name": "HF Advanced + DeepSpeed ZeRO-3",
+  "type": "finetune",
+  "framework": "huggingface",
+  "config": {
+    "model_name": "gpt2",
+    "task_type": "generation",
+    "max_length": 256,
+    "precision": "bf16",
+    "stages": [
+      { "name": "warmup", "epochs": 1, "learning_rate": 5e-5, "batch_size": 8,
+        "curriculum": { "incremental": true, "mode": "length", "start_frac": 0.4, "end_frac": 0.8 } },
+      { "name": "main", "epochs": 2, "learning_rate": 3e-5, "batch_size": 8 },
+      { "name": "refinement", "epochs": 1, "learning_rate": 1e-5, "batch_size": 8 }
+    ],
+    "distillation": {
+      "enabled": true,
+      "teacher_model": "gpt2-medium",
+      "temperature": 2.0,
+      "alpha_distill": 0.5,
+      "alpha_ce": 0.5
+    },
+    "grad_clip": { "type": "norm", "max_grad_norm": 1.0 },
+    "distributed": {
+      "deepspeed": "training_scripts/deepspeed/zero3.json",
+      "gradient_accumulation_steps": 2
+    }
+  }
+}
