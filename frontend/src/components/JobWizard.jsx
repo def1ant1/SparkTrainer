@@ -50,6 +50,22 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
   const [computeDtype, setComputeDtype] = useState('bfloat16'); // bfloat16|float16|float32
   const [gradCheckpoint, setGradCheckpoint] = useState(false);
 
+  // Reproducibility
+  const [seed, setSeed] = useState('');
+  const [deterministic, setDeterministic] = useState(false);
+
+  // Experiment tracking
+  const [expName, setExpName] = useState('');
+  const [expTags, setExpTags] = useState('');
+  const [expNotes, setExpNotes] = useState('');
+  const [trackMlflow, setTrackMlflow] = useState(false);
+  const [trackWandb, setTrackWandb] = useState(false);
+  const [trackProject, setTrackProject] = useState('trainer');
+  const [trackRun, setTrackRun] = useState('');
+  const [mlflowUri, setMlflowUri] = useState('');
+  const [wandbApiKey, setWandbApiKey] = useState('');
+  const [wandbEntity, setWandbEntity] = useState('');
+
   // Advanced Training Strategies
   const [enableStages, setEnableStages] = useState(false);
   const [stages, setStages] = useState([
@@ -80,6 +96,22 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
   const [evalLongQA, setEvalLongQA] = useState(false);
   const [evalLengths, setEvalLengths] = useState('4096,8192,16384');
   const [preferCtxScript, setPreferCtxScript] = useState(true);
+
+  // Hyperparameter Optimization (Optuna)
+  const [hpoEnabled, setHpoEnabled] = useState(false);
+  const [hpoMetric, setHpoMetric] = useState('eval_loss');
+  const [hpoDirection, setHpoDirection] = useState('minimize');
+  const [hpoMetricsText, setHpoMetricsText] = useState(''); // comma-separated multi-metrics
+  const [hpoMaxTrials, setHpoMaxTrials] = useState(10);
+  const [hpoTimeout, setHpoTimeout] = useState(0);
+  const [hpoWorkers, setHpoWorkers] = useState(1);
+  const [hpoSampler, setHpoSampler] = useState('tpe'); // tpe|random
+  const [hpoPruner, setHpoPruner] = useState('median'); // median|asha|none
+  const [hpoTrialEpochs, setHpoTrialEpochs] = useState(1);
+  const [hpoSpace, setHpoSpace] = useState([
+    { name: 'learning_rate', type: 'float', low: 1e-6, high: 5e-4, log: true },
+    { name: 'batch_size', type: 'int', low: 4, high: 32, step: 4 },
+  ]);
 
   // Architecture custom params (simple)
   const [customArch, setCustomArch] = useState({ input_size: 784, output_size: 10, hidden_layers: '512,256,128' });
@@ -127,6 +159,11 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
         precision: 'bf16',
         grad_clip: { type: 'norm', max_grad_norm: 1.0 }
       }
+    },
+    hf_zero3_perf: {
+      framework: 'huggingface', arch: 'transformer', model: 'gpt2', epochs: 3, batchSize: 8, lr: 3e-5,
+      distributed: { deepspeed: 'training_scripts/deepspeed/zero3.json', gradient_accumulation_steps: 8 },
+      precision: 'bf16'
     }
   }), []);
 
@@ -139,6 +176,11 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
     setEpochs(p.epochs);
     setBatchSize(p.batchSize);
     setLr(p.lr);
+    if (p.distributed) {
+      if (p.distributed.deepspeed) setDsPath(p.distributed.deepspeed);
+      if (p.distributed.gradient_accumulation_steps) setGradAccum(p.distributed.gradient_accumulation_steps);
+    }
+    if (p.precision) setPrecision(p.precision);
     if (p.advanced) {
       setEnableStages(true);
       setStages(p.advanced.stages || stages);
@@ -191,6 +233,19 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
         cfg.compute_dtype = computeDtype;
       }
       cfg.gradient_checkpointing = gradCheckpoint;
+      if (seed !== '') cfg.seed = parseInt(seed) || undefined;
+      if (deterministic) cfg.deterministic = true;
+      cfg.tracking = {
+        mlflow: { enabled: trackMlflow, experiment: expName || undefined },
+        wandb: { enabled: trackWandb },
+        project: trackProject || undefined,
+        name: trackRun || undefined,
+        env: {
+          ...(mlflowUri ? { MLFLOW_TRACKING_URI: mlflowUri } : {}),
+          ...(wandbApiKey ? { WANDB_API_KEY: wandbApiKey } : {}),
+          ...(wandbEntity ? { WANDB_ENTITY: wandbEntity } : {}),
+        }
+      };
       if (enableStages) cfg.stages = stages.map(s => ({
         name: s.name,
         epochs: parseInt(s.epochs)||1,
@@ -232,6 +287,21 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
           eval: { run_ppl: evalPpl, run_needle: evalNeedle, run_long_qa: evalLongQA, lengths: evalLengths.split(',').map(s=>parseInt(s.trim())).filter(Boolean) }
         };
       }
+      if (hpoEnabled) {
+        cfg.hpo = {
+          enabled: true,
+          metric: hpoMetric,
+          direction: hpoDirection,
+          metrics: (hpoMetricsText||'').split(',').map(s=>s.trim()).filter(Boolean),
+          max_trials: parseInt(hpoMaxTrials)||10,
+          timeout_seconds: parseInt(hpoTimeout)||0,
+          workers: parseInt(hpoWorkers)||1,
+          sampler: hpoSampler,
+          pruner: hpoPruner,
+          trial_epochs: parseInt(hpoTrialEpochs)||1,
+          space: hpoSpace,
+        };
+      }
     }
     if (framework === 'pytorch' && arch === 'custom') {
       cfg.input_size = customArch.input_size;
@@ -239,6 +309,27 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
       cfg.hidden_layers = customArch.hidden_layers.split(',').map(s=>parseInt(s.trim())).filter(Boolean);
     }
     return cfg;
+  };
+
+  const autoSuggestHpo = () => {
+    // Heuristic: infer GPU memory and model size hints
+    let memGiB = 16;
+    try {
+      const g = (partitions?.gpus||[])[0];
+      if (g && g.memory_total_mib) memGiB = Math.max(8, Math.floor((g.memory_total_mib||0)/1024));
+    } catch {}
+    const isLargeModel = /llama|t5-(?:(?:3|11)b)|gpt\d+-?(?:xl|large|neo)/i.test(hfModel);
+    const baseLR = isLargeModel ? 1e-5 : 3e-5;
+    const maxBS = Math.max(4, Math.min(64, Math.floor(memGiB/2)));
+    setHpoSpace([
+      { name:'learning_rate', type:'float', low: baseLR/10, high: baseLR*10, log:true },
+      { name:'batch_size', type:'int', low: 4, high: maxBS, step: 4 },
+      ...(lora.enabled ? [{ name:'lora.r', type:'int', low: 4, high: 64, step: 4 }] : [])
+    ]);
+    setHpoMaxTrials(20);
+    setHpoTrialEpochs(1);
+    setHpoSampler('tpe');
+    setHpoPruner('median');
   };
 
   const onSubmit = async () => {
@@ -251,6 +342,9 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
       ...(gpuMode==='auto' ? { gpu_prefer: gpuAutoPrefer } : {}),
       ...(gpuMode==='select' && gpuSelection ? { gpu: JSON.parse(gpuSelection) } : {}),
     };
+    if (expName) {
+      payload.experiment = { name: expName, tags: expTags.split(',').map(s=>s.trim()).filter(Boolean), notes: expNotes };
+    }
     try {
       const v = await api.validateJob(payload);
       if (!v.ok) {
@@ -258,6 +352,25 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
         return;
       }
       const res = await api.createJob(payload);
+      try {
+        if (hpoEnabled) {
+          const metrics = (hpoMetricsText||'').split(',').map(s=>s.trim()).filter(Boolean);
+          await api.saveHpoStudy({
+            job_id: res?.id,
+            framework,
+            model: hfModel,
+            metrics: metrics.length>0 ? metrics : [hpoMetric],
+            base_metric: hpoMetric,
+            direction: hpoDirection,
+            max_trials: hpoMaxTrials,
+            timeout: hpoTimeout,
+            workers: hpoWorkers,
+            sampler: hpoSampler,
+            pruner: hpoPruner,
+            space: hpoSpace,
+          });
+        }
+      } catch {}
       setValidating(false);
       alert(`Job created: ${res.id}`);
       onNavigate('jobs');
@@ -309,6 +422,7 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
               <button onClick={()=>applyPreset('bert_cls')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">BERT Fine-tune</button>
               <button onClick={()=>applyPreset('gpt2_ft')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">GPT-2 Fine-tune</button>
               <button onClick={()=>applyPreset('hf_advanced_balanced')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">HF Advanced (Curriculum + KD)</button>
+              <button onClick={()=>applyPreset('hf_zero3_perf')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">HF ZeRO‑3 Performance</button>
             </div>
           </div>
 
@@ -606,9 +720,76 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
                 </div>
               </div>
             </div>
-          </details>
+        </details>
         )}
 
+          {framework==='huggingface' && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-sm font-semibold">Hyperparameter Optimization (Optuna)</summary>
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={hpoEnabled} onChange={e=>setHpoEnabled(e.target.checked)}/> Enable HPO</label></div>
+                <div><label className="text-sm">Metric</label><input className="w-full border rounded px-3 py-2" value={hpoMetric} onChange={e=>setHpoMetric(e.target.value)} placeholder="eval_loss"/></div>
+                <div><label className="text-sm">Direction</label><select className="w-full border rounded px-3 py-2" value={hpoDirection} onChange={e=>setHpoDirection(e.target.value)}><option value="minimize">Minimize</option><option value="maximize">Maximize</option></select></div>
+                <div className="md:col-span-2"><label className="text-sm">Metrics (multi, comma‑sep)</label><input className="w-full border rounded px-3 py-2" value={hpoMetricsText} onChange={e=>setHpoMetricsText(e.target.value)} placeholder="eval_loss,accuracy"/></div>
+                <div>
+                  <label className="text-sm">Presets</label>
+                  <select className="w-full border rounded px-3 py-2" onChange={e=>{
+                    const p = e.target.value;
+                    if (p==='loss_acc'){ setHpoMetricsText('eval_loss,accuracy'); setHpoMetric('eval_loss'); setHpoDirection('minimize'); }
+                    if (p==='bleu_rouge'){ setHpoMetricsText('bleu,rougeL'); setHpoMetric('bleu'); setHpoDirection('maximize'); }
+                    if (p==='f1_latency'){ setHpoMetricsText('f1,latency_ms'); setHpoMetric('f1'); setHpoDirection('maximize'); }
+                    e.target.selectedIndex=0;
+                  }}>
+                    <option value="">Select…</option>
+                    <option value="loss_acc">Loss + Accuracy</option>
+                    <option value="bleu_rouge">BLEU + ROUGE</option>
+                    <option value="f1_latency">F1 + Latency</option>
+                  </select>
+                </div>
+                <div><label className="text-sm">Max Trials</label><input type="number" className="w-full border rounded px-3 py-2" value={hpoMaxTrials} onChange={e=>setHpoMaxTrials(parseInt(e.target.value)||0)} /></div>
+                <div><label className="text-sm">Timeout (sec)</label><input type="number" className="w-full border rounded px-3 py-2" value={hpoTimeout} onChange={e=>setHpoTimeout(parseInt(e.target.value)||0)} /></div>
+                <div><label className="text-sm">Workers</label><input type="number" className="w-full border rounded px-3 py-2" value={hpoWorkers} onChange={e=>setHpoWorkers(parseInt(e.target.value)||1)} /></div>
+                <div><label className="text-sm">Sampler</label><select className="w-full border rounded px-3 py-2" value={hpoSampler} onChange={e=>setHpoSampler(e.target.value)}><option value="tpe">Bayesian (TPE)</option><option value="random">Random</option></select></div>
+                <div><label className="text-sm">Pruner</label><select className="w-full border rounded px-3 py-2" value={hpoPruner} onChange={e=>setHpoPruner(e.target.value)}><option value="median">Median</option><option value="asha">ASHA</option><option value="none">None</option></select></div>
+                <div><label className="text-sm">Trial Epochs</label><input type="number" className="w-full border rounded px-3 py-2" value={hpoTrialEpochs} onChange={e=>setHpoTrialEpochs(parseInt(e.target.value)||1)} /></div>
+              </div>
+              <div className="mt-2">
+                <div className="text-sm font-semibold mb-1">Search Space</div>
+                <div className="space-y-2">
+                  {hpoSpace.map((p, idx) => (
+                    <div key={idx} className="grid grid-cols-1 md:grid-cols-7 gap-2 text-xs items-end">
+                      <label className="md:col-span-2">Name<input className="w-full border rounded px-2 py-1" value={p.name} onChange={e=>{const a=[...hpoSpace]; a[idx]={...a[idx], name:e.target.value}; setHpoSpace(a);}} placeholder="learning_rate, batch_size, lora.r, ..."/></label>
+                      <label>Type<select className="w-full border rounded px-2 py-1" value={p.type} onChange={e=>{const a=[...hpoSpace]; a[idx]={...a[idx], type:e.target.value}; setHpoSpace(a);}}><option value="float">float</option><option value="int">int</option><option value="categorical">categorical</option></select></label>
+                      {p.type!=='categorical' ? (<>
+                        <label>Low<input type="number" className="w-full border rounded px-2 py-1" value={p.low} onChange={e=>{const a=[...hpoSpace]; a[idx]={...a[idx], low: parseFloat(e.target.value)}; setHpoSpace(a);}}/></label>
+                        <label>High<input type="number" className="w-full border rounded px-2 py-1" value={p.high} onChange={e=>{const a=[...hpoSpace]; a[idx]={...a[idx], high: parseFloat(e.target.value)}; setHpoSpace(a);}}/></label>
+                        <label>Step<input type="number" className="w-full border rounded px-2 py-1" value={p.step||''} onChange={e=>{const a=[...hpoSpace]; a[idx]={...a[idx], step: e.target.value===''?undefined:parseFloat(e.target.value)}; setHpoSpace(a);}}/></label>
+                        <label className="inline-flex items-center gap-2"><input type="checkbox" checked={!!p.log} onChange={e=>{const a=[...hpoSpace]; a[idx]={...a[idx], log: e.target.checked}; setHpoSpace(a);}}/> log</label>
+                      </>): (
+                        <label className="md:col-span-4">Choices<input className="w-full border rounded px-2 py-1" placeholder="comma-separated" value={(p.choices||[]).join(',')} onChange={e=>{const a=[...hpoSpace]; a[idx]={...a[idx], choices: e.target.value.split(',').map(s=>s.trim()).filter(Boolean)}; setHpoSpace(a);}}/></label>
+                      )}
+                      <button className="px-2 py-1 border rounded" onClick={()=>{const a=[...hpoSpace]; a.splice(idx,1); setHpoSpace(a);}}>Remove</button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <button className="px-2 py-1 border rounded" onClick={()=>setHpoSpace([...hpoSpace, { name:'', type:'float', low:0, high:1 }])}>Add Param</button>
+                    <button className="px-2 py-1 border rounded" onClick={autoSuggestHpo}>Auto-suggest</button>
+                    {framework==='pytorch' && (
+                      <button className="px-2 py-1 border rounded" onClick={()=>{
+                        setHpoEnabled(true);
+                        setHpoMetric('eval_loss');
+                        setHpoSpace([
+                          { name:'learning_rate', type:'float', low:1e-5, high:1e-2, log:true },
+                          { name:'batch_size', type:'int', low:8, high:128, step:8 },
+                        ]);
+                        setHpoMaxTrials(20);
+                      }}>Torch HPO Preset</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </details>
+          )}
         {/* Precision & Distributed */}
         {framework==='huggingface' && (
           <details className="mt-2">
@@ -645,7 +826,10 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
                 <div className="text-sm font-semibold mb-1">Distributed</div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
                   <div className="md:col-span-2"><label className="text-xs">DeepSpeed config path</label><input className="w-full border rounded px-2 py-1" value={dsPath} onChange={e=>setDsPath(e.target.value)} placeholder="training_scripts/deepspeed/zero2.json"/></div>
-                  <div className="flex items-end"><button type="button" className="px-2 py-1 border rounded" onClick={()=>setDsPath('training_scripts/deepspeed/zero2.json')}>Use ZeRO‑2 template</button></div>
+                  <div className="flex items-end gap-2">
+                    <button type="button" className="px-2 py-1 border rounded" onClick={()=>setDsPath('training_scripts/deepspeed/zero2.json')}>Use ZeRO‑2 template</button>
+                    <button type="button" className="px-2 py-1 border rounded" onClick={()=>setDsPath('training_scripts/deepspeed/zero3.json')}>Use ZeRO‑3 template</button>
+                  </div>
                   <div className="md:col-span-2"><label className="text-xs">FSDP config string</label><input className="w-full border rounded px-2 py-1" value={fsdp} onChange={e=>setFsdp(e.target.value)} placeholder="full_shard auto_wrap"/></div>
                   <label className="inline-flex items-center gap-2"><input type="checkbox" checked={ddpFindUnused} onChange={e=>setDdpFindUnused(e.target.checked)}/> DDP find_unused_parameters</label>
                   <label className="text-xs">FSDP min params<input type="number" className="w-full border rounded px-2 py-1" value={fsdpMinParams} onChange={e=>setFsdpMinParams(parseInt(e.target.value)||0)}/></label>
@@ -655,6 +839,47 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
             </div>
           </details>
         )}
+
+        {/* Experiment & Tracking */}
+        <details className="mt-2">
+          <summary className="cursor-pointer text-sm font-semibold">Experiment & Tracking</summary>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            <div>
+              <label className="text-xs">Experiment Name</label>
+              <input className="w-full border rounded px-2 py-1" value={expName} onChange={e=>setExpName(e.target.value)} placeholder="my-experiment" />
+            </div>
+            <div>
+              <label className="text-xs">Tags (comma)</label>
+              <input className="w-full border rounded px-2 py-1" value={expTags} onChange={e=>setExpTags(e.target.value)} placeholder="baseline, lora, test" />
+            </div>
+            <div>
+              <label className="text-xs">Notes</label>
+              <input className="w-full border rounded px-2 py-1" value={expNotes} onChange={e=>setExpNotes(e.target.value)} placeholder="Short description" />
+            </div>
+            <div>
+              <label className="text-xs">Seed</label>
+              <input className="w-full border rounded px-2 py-1" value={seed} onChange={e=>setSeed(e.target.value)} placeholder="e.g., 42" />
+              <label className="inline-flex items-center gap-2 mt-1"><input type="checkbox" checked={deterministic} onChange={e=>setDeterministic(e.target.checked)} /> Deterministic</label>
+            </div>
+            <div className="md:col-span-2">
+              <div className="text-xs font-semibold mb-1">Logging</div>
+              <div className="flex items-center gap-4">
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={trackMlflow} onChange={e=>setTrackMlflow(e.target.checked)} /> MLflow</label>
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={trackWandb} onChange={e=>setTrackWandb(e.target.checked)} /> Weights & Biases</label>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <label className="text-xs">Project<input className="w-full border rounded px-2 py-1" value={trackProject} onChange={e=>setTrackProject(e.target.value)} placeholder="trainer" /></label>
+                <label className="text-xs">Run Name<input className="w-full border rounded px-2 py-1" value={trackRun} onChange={e=>setTrackRun(e.target.value)} placeholder="run-001" /></label>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <label className="text-xs">MLflow Tracking URI<input className="w-full border rounded px-2 py-1" value={mlflowUri} onChange={e=>setMlflowUri(e.target.value)} placeholder="http://mlflow:5000" /></label>
+                <label className="text-xs">W&B Entity<input className="w-full border rounded px-2 py-1" value={wandbEntity} onChange={e=>setWandbEntity(e.target.value)} placeholder="org-or-username" /></label>
+                <label className="text-xs md:col-span-2">W&B API Key<input className="w-full border rounded px-2 py-1" value={wandbApiKey} onChange={e=>setWandbApiKey(e.target.value)} placeholder="xxxxxxxx" /></label>
+              </div>
+              <div className="text-[11px] text-text/60 mt-1">These are passed to the training process as environment variables (if provided). Logging degrades gracefully if unavailable.</div>
+            </div>
+          </div>
+        </details>
 
           {framework==='huggingface' && (
             <details className="mt-2">

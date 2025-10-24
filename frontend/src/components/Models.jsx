@@ -9,17 +9,23 @@ export function ModelsPage({ api, onOpen, onCompare }) {
   const [sort, setSort] = useState('date');
   const [order, setOrder] = useState('desc');
   const [sel, setSel] = useState({});
+  const [size, setSize] = useState('');
+  const [license, setLicense] = useState('');
+  const [tag, setTag] = useState('');
 
   const load = async () => {
     const params = new URLSearchParams();
     if (q) params.set('q', q);
     if (framework) params.set('framework', framework);
     if (architecture) params.set('architecture', architecture);
+    if (size) params.set('size', size);
+    if (license) params.set('license', license);
+    if (tag) params.set('tag', tag);
     params.set('sort', sort); params.set('order', order);
     const data = await api.getModelsRaw(params.toString());
     setItems(data);
   };
-  useEffect(() => { load(); }, [q, framework, architecture, sort, order]);
+  useEffect(() => { load(); }, [q, framework, architecture, sort, order, size, license, tag]);
 
   const allSelected = useMemo(()=>items.length>0 && items.every(m => sel[m.id]), [items, sel]);
   const toggleAll = () => {
@@ -57,7 +63,7 @@ export function ModelsPage({ api, onOpen, onCompare }) {
           <button onClick={bulkDelete} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted text-danger">Delete</button>
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
         <input placeholder="Search" value={q} onChange={e=>setQ(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface"/>
         <select value={framework} onChange={e=>setFramework(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface">
           <option value="">All Frameworks</option>
@@ -66,11 +72,15 @@ export function ModelsPage({ api, onOpen, onCompare }) {
           <option value="tensorflow">TensorFlow</option>
         </select>
         <input placeholder="Architecture (e.g., resnet)" value={architecture} onChange={e=>setArchitecture(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface"/>
+        <select value={size} onChange={e=>setSize(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface"><option value="">Any Size</option><option value="small">Small</option><option value="base">Base</option><option value="large">Large</option><option value="xl">XL</option></select>
+        <input placeholder="Tag/Domain" value={tag} onChange={e=>setTag(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface"/>
+        <input placeholder="License" value={license} onChange={e=>setLicense(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface"/>
         <div className="flex gap-2">
           <select value={sort} onChange={e=>setSort(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface">
             <option value="date">Date</option>
             <option value="size">Size</option>
             <option value="accuracy">Accuracy</option>
+            <option value="popular">Popular</option>
             <option value="name">Name</option>
           </select>
           <select value={order} onChange={e=>setOrder(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface">
@@ -124,18 +134,23 @@ export function ModelCard({ m, selected, onSelect, onOpen }) {
       <div className="flex justify-between items-start">
         <div>
           <div className="font-semibold text-lg">{m.name}</div>
-          <div className="text-xs text-text/70">{m.framework} {m.architecture ? `• ${m.architecture}` : ''}</div>
+          <div className="text-xs text-text/70">{m.framework} {m.architecture ? `• ${m.architecture}` : ''} {m.size_category ? `• ${m.size_category}` : ''}</div>
         </div>
         <input type="checkbox" checked={selected} onChange={e=>onSelect(e.target.checked)} />
       </div>
+      {m.card_excerpt && <div className="text-xs text-text/80 line-clamp-3">{m.card_excerpt}</div>}
       <div className="text-sm">
         {m.metrics?.eval_accuracy!=null && <div>Accuracy: <span className="font-semibold">{m.metrics.eval_accuracy.toFixed(3)}</span></div>}
         {m.parameters!=null && <div>Params: <span className="font-semibold">{m.parameters.toLocaleString()}</span></div>}
         <div>Size: <span className="font-semibold">{fmtSize}</span></div>
       </div>
-      <div className="flex flex-wrap gap-2 text-xs">
-        {(m.tags||[]).map((t,i)=> <span key={i} className="px-2 py-1 bg-muted rounded border border-border">{t}</span>)}
-      </div>
+      {(m.tags||[]).length>0 && (
+        <div className="flex flex-wrap gap-2 text-xs">
+          {(m.tags||[]).slice(0,5).map((t,i)=> <span key={i} className="px-2 py-1 bg-muted rounded border border-border">{t}</span>)}
+          {(m.tags||[]).length>5 && <span className="text-text/60">+{(m.tags||[]).length-5}</span>}
+        </div>
+      )}
+      {m.popularity && <div className="text-[10px] text-text/60">Views {m.popularity.views||0} • Exports {m.popularity.exports||0}</div>}
       <div className="flex justify-end">
         <button onClick={onOpen} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">Open</button>
       </div>
@@ -189,7 +204,7 @@ export function ModelDetail({ id, api, onBack }) {
         </div>
       </div>
       <div className="flex gap-2 text-sm">
-        {['overview','architecture','metrics','files','adapters','card'].map(t => (
+        {['overview','architecture','metrics','evals','files','adapters','gallery','similar','card'].map(t => (
           <button key={t} onClick={()=>setTab(t)} className={`px-3 py-2 rounded ${tab===t?'bg-primary text-on-primary':'bg-muted'}`}>{t[0].toUpperCase()+t.slice(1)}</button>
         ))}
       </div>
@@ -231,7 +246,10 @@ export function ModelDetail({ id, api, onBack }) {
               <pre className="bg-muted p-3 rounded text-xs overflow-auto">{JSON.stringify(cfg, null, 2)}</pre>
             </div>
           </div>
-          <div className="text-xs text-text/60">Future: loss curves, accuracy charts, confusion matrix for classification.</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <MetricLine title="Train Loss" data={(metrics.train_loss_history||[]).map((y,i)=>({x:i,y}))} />
+            <MetricLine title="Eval Accuracy" data={(metrics.eval_accuracy_history||[]).map((y,i)=>({x:i,y}))} />
+          </div>
         </div>
       )}
 
@@ -244,6 +262,10 @@ export function ModelDetail({ id, api, onBack }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {tab==='evals' && (
+        <ModelEvals id={id} />
       )}
 
       {tab==='adapters' && (
@@ -290,6 +312,96 @@ export function ModelDetail({ id, api, onBack }) {
           <div className="text-xs text-text/60">Future: rich markdown editor, version history UI, export as PDF.</div>
         </div>
       )}
+
+      {tab==='gallery' && (
+        <div className="bg-surface p-4 rounded border border-border space-y-3">
+          <div className="text-sm text-text/70">Screenshots / Media</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {(info.assets?.images||[]).map((p,i)=>(
+              <div key={i} className="border border-border rounded overflow-hidden">
+                <img src={`/api/models/${encodeURIComponent(id)}/file?path=${encodeURIComponent(p)}`} className="w-full h-32 object-cover" />
+              </div>
+            ))}
+          </div>
+          <div className="space-y-2">
+            {(info.assets?.videos||[]).map((p,i)=>(
+              <video key={i} src={`/api/models/${encodeURIComponent(id)}/file?path=${encodeURIComponent(p)}`} controls className="w-full max-w-xl rounded border border-border" />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab==='similar' && (
+        <SimilarModels id={id} onOpen={onBack ? (mid)=>{} : undefined} />
+      )}
+    </div>
+  );
+}
+
+function MetricLine({ title, data }){
+  const width = 260, height = 120, pad = 24;
+  if (!data || data.length===0) return <div className="text-xs text-text/60">No {title} data</div>;
+  const minX = 0, maxX = Math.max(...data.map(d=>d.x), 1);
+  const minY = Math.min(...data.map(d=>d.y)), maxY = Math.max(...data.map(d=>d.y));
+  const sx = (x)=> pad + (x-minX)/(maxX-minX||1)*(width-2*pad);
+  const sy = (y)=> height-pad - (y-minY)/(maxY-minY||1)*(height-2*pad);
+  const path = data.map((d,i)=>`${i===0?'M':'L'} ${sx(d.x)} ${sy(d.y)}`).join(' ');
+  return (
+    <div>
+      <div className="text-sm mb-1">{title}</div>
+      <svg width={width} height={height} className="w-full">
+        <rect x={0} y={0} width={width} height={height} fill="transparent" stroke="#eee" />
+        <path d={path} stroke="#2563eb" strokeWidth={2} fill="none" />
+      </svg>
+    </div>
+  );
+}
+
+function SimilarModels({ id }){
+  const [items, setItems] = useState([]);
+  useEffect(()=>{ (async ()=>{ try{ const r = await fetch(`/api/models/${encodeURIComponent(id)}/similar`); const j = await r.json(); setItems(j.similar||[]); } catch{} })(); }, [id]);
+  if (!items.length) return <div className="text-xs text-text/60">No similar models found</div>;
+  return (
+    <div className="bg-surface p-4 rounded border border-border">
+      <div className="text-sm font-semibold mb-2">Similar Models</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {items.map((it,i)=>(<div key={i} className="text-sm">{it.id} <span className="text-xs text-text/60">({it.score})</span></div>))}
+      </div>
+    </div>
+  );
+}
+
+function ModelEvals({ id }){
+  const [items, setItems] = useState([]);
+  const [name, setName] = useState('');
+  const [metrics, setMetrics] = useState('{}');
+  const [notes, setNotes] = useState('');
+  const load = async () => { try{ const r = await fetch(`/api/models/${encodeURIComponent(id)}/evals`); const j = await r.json(); setItems(j.items||[]); }catch{} };
+  useEffect(()=>{ load(); }, [id]);
+  const save = async () => {
+    try{
+      await fetch(`/api/models/${encodeURIComponent(id)}/evals`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, metrics: JSON.parse(metrics||'{}'), notes })});
+      setName(''); setMetrics('{}'); setNotes(''); load();
+    } catch { alert('Failed to save'); }
+  };
+  return (
+    <div className="bg-surface p-4 rounded border border-border space-y-3">
+      <div className="text-sm font-semibold">Evaluations</div>
+      <table className="w-full text-sm">
+        <thead className="bg-muted border-b border-border"><tr><th className="text-left px-3 py-2">Time</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Metrics</th><th className="text-left px-3 py-2">Notes</th></tr></thead>
+        <tbody className="divide-y divide-border">
+          {items.map((it,i)=>(
+            <tr key={i}><td className="px-3 py-2 text-xs">{new Date(it.ts).toLocaleString()}</td><td className="px-3 py-2">{it.name}</td><td className="px-3 py-2 text-xs"><code>{Object.entries(it.metrics||{}).slice(0,6).map(([k,v])=>`${k}: ${v}`).join(', ')}</code></td><td className="px-3 py-2 text-xs">{it.notes||''}</td></tr>
+          ))}
+          {items.length===0 && (<tr><td className="px-3 py-2 text-xs text-text/60" colSpan={4}>No evaluations</td></tr>)}
+        </tbody>
+      </table>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+        <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Benchmark name (e.g., GLUE)" value={name} onChange={e=>setName(e.target.value)} />
+        <input className="border border-border rounded px-3 py-2 bg-surface" placeholder='Metrics JSON (e.g., {"acc":0.91})' value={metrics} onChange={e=>setMetrics(e.target.value)} />
+        <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Notes" value={notes} onChange={e=>setNotes(e.target.value)} />
+      </div>
+      <div className="flex justify-end"><button className="px-3 py-2 border border-border rounded" onClick={save}>Add Evaluation</button></div>
     </div>
   );
 }

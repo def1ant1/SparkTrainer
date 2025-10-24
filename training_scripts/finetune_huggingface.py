@@ -31,6 +31,16 @@ except Exception:
 
 from datasets import Dataset
 import numpy as np
+import random
+
+try:
+    import mlflow
+except Exception:
+    mlflow = None  # type: ignore
+try:
+    import wandb
+except Exception:
+    wandb = None  # type: ignore
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,6 +59,43 @@ def _to_dtype(s: str):
         'fp32': torch.float32,
     }
     return m.get((s or '').lower(), torch.float32)
+
+
+def _set_global_seed(cfg: dict):
+    seed = cfg.get('seed')
+    deterministic = bool(cfg.get('deterministic', False))
+    if seed is None:
+        return
+    try:
+        seed = int(seed)
+    except Exception:
+        return
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        if deterministic:
+            try:
+                torch.backends.cudnn.deterministic = True
+                torch.backends.cudnn.benchmark = False
+                torch.use_deterministic_algorithms(True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _flatten_dict(d: dict, prefix: str = '') -> dict:
+    out = {}
+    for k, v in (d or {}).items():
+        key = f"{prefix}.{k}" if prefix else str(k)
+        if isinstance(v, dict):
+            out.update(_flatten_dict(v, key))
+        else:
+            out[key] = v
+    return out
 
 
 def create_dummy_text_dataset(config):
@@ -351,6 +398,8 @@ def _build_training_args(output_dir: str, config: Dict[str, Any], stage_cfg: Opt
 
 
 def finetune_hf(config, job_id):
+    # Seed & determinism
+    _set_global_seed(config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
@@ -405,6 +454,51 @@ def finetune_hf(config, job_id):
         total_loops = stage_epochs if incremental else 1
         loops_epochs = 1 if incremental else stage_epochs
 
+        # Tracking (mlflow / wandb)
+        tracking = config.get('tracking') or {}
+        use_mlflow = bool((tracking.get('mlflow') or {}).get('enabled') and mlflow is not None)
+        use_wandb = bool((tracking.get('wandb') or {}).get('enabled') and wandb is not None)
+        run_name = tracking.get('name') or f"run_{job_id[:8]}"
+        if use_mlflow:
+            try:
+                mlflow.set_experiment(tracking.get('experiment') or 'default')
+                mlflow.start_run(run_name=run_name)
+                mlflow.log_params({k: v for k, v in _flatten_dict(config).items() if isinstance(v, (int, float, str, bool))})
+                try:
+                    run = mlflow.active_run()
+                    if run is not None:
+                        payload = {'kind': 'tracking', 'mlflow': {'experiment': (tracking.get('experiment') or 'default'), 'run_id': run.info.run_id}}
+                        print('METRIC:' + json.dumps(payload), flush=True)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        if use_wandb:
+            try:
+                wandb.init(project=(tracking.get('project') or 'trainer'), name=run_name, reinit=True, config=config)
+                try:
+                    url = wandb.run.url if hasattr(wandb, 'run') and wandb.run is not None else None
+                    payload = {'kind': 'tracking', 'wandb': {'url': url, 'project': tracking.get('project')}}
+                    print('METRIC:' + json.dumps(payload), flush=True)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        class TrackingCallback(TrainerCallback):
+            def on_log(self, args, state, control, logs=None, **kwargs):
+                if logs is None:
+                    return
+                try:
+                    if use_mlflow:
+                        for k, v in logs.items():
+                            if isinstance(v, (int, float)):
+                                mlflow.log_metric(k, float(v), step=int(state.global_step or 0))
+                    if use_wandb:
+                        wandb.log({k: float(v) if isinstance(v, (int, float)) else v for k, v in logs.items()}, step=int(state.global_step or 0))
+                except Exception:
+                    pass
+
         for loop_idx in range(total_loops):
             # Apply curriculum subset for this loop
             subset_raw = _apply_curriculum_subset(raw_dataset, curriculum, loop_idx, total_loops) if curriculum else raw_dataset
@@ -450,7 +544,7 @@ def finetune_hf(config, job_id):
                 eval_dataset=eval_dataset,
                 tokenizer=tokenizer,
                 data_collator=data_collator,
-                callbacks=[JsonLogger()],
+                callbacks=[JsonLogger(), TrackingCallback()],
                 adv_config=adv_cfg,
             )
 
@@ -522,6 +616,18 @@ def finetune_hf(config, job_id):
             'distributed': config.get('distributed'),
             'precision': config.get('precision') or config.get('compute_dtype'),
         }, f, indent=2)
+
+    # Finish tracking
+    try:
+        if use_mlflow:
+            mlflow.end_run()
+    except Exception:
+        pass
+    try:
+        if use_wandb:
+            wandb.finish()
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':

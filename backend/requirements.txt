@@ -15,6 +15,12 @@ peft==0.7.1
 # bitsandbytes provides 8/4-bit quantization (Linux/CUDA environments)
 bitsandbytes==0.43.1
 
+# Hyperparameter optimization
+optuna==3.6.0
+
+# Imaging for dataset quality (perceptual hashing, previews)
+Pillow==10.4.0
+
 # Python 3.12 requires NumPy >=1.26
 numpy==1.26.4
 

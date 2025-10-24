@@ -7,6 +7,17 @@ import json
 import os
 from datetime import datetime
 import torchvision.models as models
+import random
+import numpy as np
+
+try:
+    import mlflow
+except Exception:
+    mlflow = None  # type: ignore
+try:
+    import wandb
+except Exception:
+    wandb = None  # type: ignore
 
 # Resolve project base directory (two levels up from this script)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,7 +72,24 @@ def load_pretrained_model(config):
 
 def finetune_model(config, job_id):
     """Fine-tune a pre-trained model"""
-    
+    # Seed & determinism
+    seed = config.get('seed')
+    deterministic = bool(config.get('deterministic', False))
+    if seed is not None:
+        try:
+            seed = int(seed)
+            random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+            if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
+            if deterministic:
+                try:
+                    torch.backends.cudnn.deterministic = True
+                    torch.backends.cudnn.benchmark = False
+                    torch.use_deterministic_algorithms(True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
@@ -147,6 +175,31 @@ def finetune_model(config, job_id):
     total_steps = num_epochs * len(train_loader)
     global_step = 0
     start_time = datetime.now().isoformat()
+    # Tracking
+    tracking = config.get('tracking') or {}
+    use_mlflow = bool((tracking.get('mlflow') or {}).get('enabled') and mlflow is not None)
+    use_wandb = bool((tracking.get('wandb') or {}).get('enabled') and wandb is not None)
+    run_name = tracking.get('name') or f"run_{job_id[:8]}"
+    if use_mlflow:
+        try:
+            mlflow.set_experiment(tracking.get('experiment') or 'default')
+            mlflow.start_run(run_name=run_name)
+            def _flat(d, p=''):
+                out={}
+                for k,v in (d or {}).items():
+                    kk=f"{p}.{k}" if p else k
+                    if isinstance(v, dict): out.update(_flat(v, kk))
+                    else: out[kk]=v
+                return out
+            mlflow.log_params({k:v for k,v in _flat(config).items() if isinstance(v,(int,float,str,bool))})
+        except Exception:
+            pass
+    if use_wandb:
+        try:
+            wandb.init(project=(tracking.get('project') or 'trainer'), name=run_name, reinit=True, config=config)
+        except Exception:
+            pass
+
     for epoch in range(num_epochs):
         # Training phase
         model.train()
@@ -187,6 +240,14 @@ def finetune_model(config, job_id):
                         'start_time': start_time,
                     }
                     print('METRIC:' + json.dumps(metric), flush=True)
+                except Exception:
+                    pass
+                # Trackers
+                try:
+                    if use_mlflow:
+                        mlflow.log_metric('loss', float(loss.item()), step=global_step)
+                    if use_wandb:
+                        wandb.log({'loss': float(loss.item())}, step=global_step)
                 except Exception:
                     pass
             global_step += 1
@@ -232,6 +293,13 @@ def finetune_model(config, job_id):
                 'start_time': start_time,
             }
             print('METRIC:' + json.dumps(epoch_metric), flush=True)
+        except Exception:
+            pass
+        try:
+            if use_mlflow:
+                mlflow.log_metrics({'val_loss': float(avg_val_loss), 'val_acc_pct': float(val_accuracy)}, step=global_step)
+            if use_wandb:
+                wandb.log({'val_loss': float(avg_val_loss), 'val_acc_pct': float(val_accuracy)}, step=global_step)
         except Exception:
             pass
         
@@ -282,6 +350,16 @@ def finetune_model(config, job_id):
     print(f"\nModel saved to: {save_dir}")
     print(f"Best validation loss: {best_val_loss:.4f}")
     print("Fine-tuning completed successfully!")
+    try:
+        if use_mlflow:
+            mlflow.end_run()
+    except Exception:
+        pass
+    try:
+        if use_wandb:
+            wandb.finish()
+    except Exception:
+        pass
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

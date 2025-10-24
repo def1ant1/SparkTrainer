@@ -10,6 +10,44 @@ This document provides example configurations for common training scenarios on t
 5. [Custom Architecture](#custom-architecture)
 
 ---
+## Hyperparameter Optimization (Optuna)
+
+Define a search space and budget; the backend routes HF finetune to an Optuna runner when `config.hpo.enabled` is true.
+
+```json
+{
+  "name": "GPT-2 HPO",
+  "type": "finetune",
+  "framework": "huggingface",
+  "config": {
+    "model_name": "gpt2",
+    "task_type": "generation",
+    "epochs": 3,
+    "batch_size": 8,
+    "learning_rate": 3e-5,
+    "hpo": {
+      "enabled": true,
+      "metric": "eval_loss",
+      "direction": "minimize",
+      "max_trials": 10,
+      "timeout_seconds": 0,
+      "workers": 1,
+      "sampler": "tpe",
+      "pruner": "median",
+      "trial_epochs": 1,
+      "space": [
+        { "name": "learning_rate", "type": "float", "low": 1e-6, "high": 5e-4, "log": true },
+        { "name": "batch_size", "type": "int", "low": 4, "high": 32, "step": 4 },
+        { "name": "lora.r", "type": "int", "low": 4, "high": 64, "step": 4 }
+      ]
+    }
+  }
+}
+```
+
+Results are saved under `models/<job_id>/hpo_results.json` and `hpo_trials.json` and can be viewed via the HPO page in the UI.
+
+---
 
 ## Image Classification from Scratch
 
@@ -205,6 +243,18 @@ Example snippet:
 ```
 
 Note: Ensure the environment has DeepSpeed installed and launch via `torchrun` for multi-GPU/multi-node setups.
+
+Torchrun quickstart:
+
+```
+torchrun \
+  --nproc_per_node=4 \
+  --master_port=29500 \
+  training_scripts/finetune_huggingface.py \
+  --job-id myjob --config '{"model_name":"gpt2","task_type":"generation","distributed":{"deepspeed":"training_scripts/deepspeed/zero3.json"}}'
+```
+
+Adjust `--nproc_per_node` to the number of GPUs on your node. For multi-node, also set `--nnodes` and `--node_rank`.
 
 ---
 ## Ready-to-run Advanced Examples

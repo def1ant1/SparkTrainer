@@ -1,0 +1,151 @@
+/home/def1ant1/PycharmProjects/SparkTrainer/backend/venv/lib/python3.12/site-packages/transformers/utils/generic.py:441: UserWarning: torch.utils._pytree._register_pytree_node is deprecated. Please use torch.utils._pytree.register_pytree_node instead.
+  _torch_pytree._register_pytree_node(
+There was a problem when trying to write in your cache folder (/home/def1ant1/.cache/huggingface/hub). You should set the environment variable TRANSFORMERS_CACHE to a writable directory.
+Using device: cpu
+Model architecture: custom
+Total parameters: 567,434
+
+Starting training for 10 epochs...
+Epoch [1/10] Batch [0/32] Loss: 2.3175
+METRIC:{"kind": "batch", "epoch": 1, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 2.3174901008605957, "accuracy": 0.125, "lr": 0.001, "step": 1, "total_steps": 320, "time": "2025-10-24T16:20:41.852818", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [1/10] Batch [10/32] Loss: 2.2879
+METRIC:{"kind": "batch", "epoch": 1, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 2.287900447845459, "accuracy": 0.10511363636363637, "lr": 0.001, "step": 11, "total_steps": 320, "time": "2025-10-24T16:20:42.649730", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [1/10] Batch [20/32] Loss: 2.2939
+METRIC:{"kind": "batch", "epoch": 1, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 2.293941020965576, "accuracy": 0.09672619047619048, "lr": 0.001, "step": 21, "total_steps": 320, "time": "2025-10-24T16:20:43.471946", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [1/10] Batch [30/32] Loss: 2.2781
+METRIC:{"kind": "batch", "epoch": 1, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 2.2781200408935547, "accuracy": 0.10383064516129033, "lr": 0.001, "step": 31, "total_steps": 320, "time": "2025-10-24T16:20:44.288671", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 1/10 Complete:
+  Average Loss: 2.3066
+  Training Accuracy: 10.30%
+
+METRIC:{"kind": "epoch", "epoch": 1, "num_epochs": 10, "avg_loss": 2.3065755367279053, "accuracy_pct": 10.3, "step": 32, "total_steps": 320, "time": "2025-10-24T16:20:44.372625", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [2/10] Batch [0/32] Loss: 2.2436
+METRIC:{"kind": "batch", "epoch": 2, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 2.2436420917510986, "accuracy": 0.15625, "lr": 0.001, "step": 33, "total_steps": 320, "time": "2025-10-24T16:20:44.449183", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [2/10] Batch [10/32] Loss: 2.1885
+METRIC:{"kind": "batch", "epoch": 2, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 2.188514471054077, "accuracy": 0.19602272727272727, "lr": 0.001, "step": 43, "total_steps": 320, "time": "2025-10-24T16:20:45.259061", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [2/10] Batch [20/32] Loss: 2.0675
+METRIC:{"kind": "batch", "epoch": 2, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 2.0674548149108887, "accuracy": 0.24107142857142858, "lr": 0.001, "step": 53, "total_steps": 320, "time": "2025-10-24T16:20:46.047216", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [2/10] Batch [30/32] Loss: 1.9483
+METRIC:{"kind": "batch", "epoch": 2, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 1.9482824802398682, "accuracy": 0.27923387096774194, "lr": 0.001, "step": 63, "total_steps": 320, "time": "2025-10-24T16:20:46.825076", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 2/10 Complete:
+  Average Loss: 2.1164
+  Training Accuracy: 28.20%
+
+METRIC:{"kind": "epoch", "epoch": 2, "num_epochs": 10, "avg_loss": 2.1164140440523624, "accuracy_pct": 28.2, "step": 64, "total_steps": 320, "time": "2025-10-24T16:20:46.896126", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [3/10] Batch [0/32] Loss: 1.6181
+METRIC:{"kind": "batch", "epoch": 3, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 1.618124008178711, "accuracy": 0.65625, "lr": 0.001, "step": 65, "total_steps": 320, "time": "2025-10-24T16:20:46.993082", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [3/10] Batch [10/32] Loss: 1.2429
+METRIC:{"kind": "batch", "epoch": 3, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 1.2429487705230713, "accuracy": 0.65625, "lr": 0.001, "step": 75, "total_steps": 320, "time": "2025-10-24T16:20:47.790607", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [3/10] Batch [20/32] Loss: 0.9782
+METRIC:{"kind": "batch", "epoch": 3, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 0.9781553149223328, "accuracy": 0.6547619047619048, "lr": 0.001, "step": 85, "total_steps": 320, "time": "2025-10-24T16:20:48.569176", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [3/10] Batch [30/32] Loss: 0.9119
+METRIC:{"kind": "batch", "epoch": 3, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 0.9119418263435364, "accuracy": 0.655241935483871, "lr": 0.001, "step": 95, "total_steps": 320, "time": "2025-10-24T16:20:49.415210", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 3/10 Complete:
+  Average Loss: 1.2656
+  Training Accuracy: 65.50%
+
+METRIC:{"kind": "epoch", "epoch": 3, "num_epochs": 10, "avg_loss": 1.2655529081821442, "accuracy_pct": 65.5, "step": 96, "total_steps": 320, "time": "2025-10-24T16:20:49.489444", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [4/10] Batch [0/32] Loss: 0.3715
+METRIC:{"kind": "batch", "epoch": 4, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 0.37154433131217957, "accuracy": 0.9375, "lr": 0.001, "step": 97, "total_steps": 320, "time": "2025-10-24T16:20:49.564137", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [4/10] Batch [10/32] Loss: 0.1798
+METRIC:{"kind": "batch", "epoch": 4, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 0.17980431020259857, "accuracy": 0.9545454545454546, "lr": 0.001, "step": 107, "total_steps": 320, "time": "2025-10-24T16:20:50.356748", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [4/10] Batch [20/32] Loss: 0.1812
+METRIC:{"kind": "batch", "epoch": 4, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 0.18122467398643494, "accuracy": 0.9479166666666666, "lr": 0.001, "step": 117, "total_steps": 320, "time": "2025-10-24T16:20:51.264758", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [4/10] Batch [30/32] Loss: 0.1321
+METRIC:{"kind": "batch", "epoch": 4, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 0.13206934928894043, "accuracy": 0.9445564516129032, "lr": 0.001, "step": 127, "total_steps": 320, "time": "2025-10-24T16:20:52.113950", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 4/10 Complete:
+  Average Loss: 0.2410
+  Training Accuracy: 94.50%
+
+METRIC:{"kind": "epoch", "epoch": 4, "num_epochs": 10, "avg_loss": 0.24100830650422722, "accuracy_pct": 94.5, "step": 128, "total_steps": 320, "time": "2025-10-24T16:20:52.204861", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [5/10] Batch [0/32] Loss: 0.0240
+METRIC:{"kind": "batch", "epoch": 5, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 0.024048974737524986, "accuracy": 1.0, "lr": 0.001, "step": 129, "total_steps": 320, "time": "2025-10-24T16:20:52.287059", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [5/10] Batch [10/32] Loss: 0.0385
+METRIC:{"kind": "batch", "epoch": 5, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 0.03850659355521202, "accuracy": 1.0, "lr": 0.001, "step": 139, "total_steps": 320, "time": "2025-10-24T16:20:53.094229", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [5/10] Batch [20/32] Loss: 0.0402
+METRIC:{"kind": "batch", "epoch": 5, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 0.04021795466542244, "accuracy": 1.0, "lr": 0.001, "step": 149, "total_steps": 320, "time": "2025-10-24T16:20:53.885151", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [5/10] Batch [30/32] Loss: 0.0447
+METRIC:{"kind": "batch", "epoch": 5, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 0.04466749727725983, "accuracy": 0.998991935483871, "lr": 0.001, "step": 159, "total_steps": 320, "time": "2025-10-24T16:20:54.757242", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 5/10 Complete:
+  Average Loss: 0.0429
+  Training Accuracy: 99.90%
+
+METRIC:{"kind": "epoch", "epoch": 5, "num_epochs": 10, "avg_loss": 0.042906940274406224, "accuracy_pct": 99.9, "step": 160, "total_steps": 320, "time": "2025-10-24T16:20:54.851611", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [6/10] Batch [0/32] Loss: 0.0161
+METRIC:{"kind": "batch", "epoch": 6, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 0.016098296269774437, "accuracy": 1.0, "lr": 0.001, "step": 161, "total_steps": 320, "time": "2025-10-24T16:20:54.944698", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [6/10] Batch [10/32] Loss: 0.0139
+METRIC:{"kind": "batch", "epoch": 6, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 0.013866543769836426, "accuracy": 1.0, "lr": 0.001, "step": 171, "total_steps": 320, "time": "2025-10-24T16:20:55.735645", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [6/10] Batch [20/32] Loss: 0.0132
+METRIC:{"kind": "batch", "epoch": 6, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 0.01321591529995203, "accuracy": 0.9985119047619048, "lr": 0.001, "step": 181, "total_steps": 320, "time": "2025-10-24T16:20:56.544272", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [6/10] Batch [30/32] Loss: 0.0172
+METRIC:{"kind": "batch", "epoch": 6, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 0.017192181199789047, "accuracy": 0.998991935483871, "lr": 0.001, "step": 191, "total_steps": 320, "time": "2025-10-24T16:20:57.338429", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 6/10 Complete:
+  Average Loss: 0.0189
+  Training Accuracy: 99.90%
+
+METRIC:{"kind": "epoch", "epoch": 6, "num_epochs": 10, "avg_loss": 0.018861094140447676, "accuracy_pct": 99.9, "step": 192, "total_steps": 320, "time": "2025-10-24T16:20:57.421143", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [7/10] Batch [0/32] Loss: 0.0306
+METRIC:{"kind": "batch", "epoch": 7, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 0.030557934194803238, "accuracy": 0.96875, "lr": 0.001, "step": 193, "total_steps": 320, "time": "2025-10-24T16:20:57.501677", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [7/10] Batch [10/32] Loss: 0.0125
+METRIC:{"kind": "batch", "epoch": 7, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 0.012504294514656067, "accuracy": 0.9943181818181818, "lr": 0.001, "step": 203, "total_steps": 320, "time": "2025-10-24T16:20:58.285056", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [7/10] Batch [20/32] Loss: 0.0170
+METRIC:{"kind": "batch", "epoch": 7, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 0.01695813238620758, "accuracy": 0.9970238095238095, "lr": 0.001, "step": 213, "total_steps": 320, "time": "2025-10-24T16:20:59.113756", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [7/10] Batch [30/32] Loss: 0.0147
+METRIC:{"kind": "batch", "epoch": 7, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 0.014695955440402031, "accuracy": 0.9969758064516129, "lr": 0.001, "step": 223, "total_steps": 320, "time": "2025-10-24T16:20:59.919107", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 7/10 Complete:
+  Average Loss: 0.0140
+  Training Accuracy: 99.70%
+
+METRIC:{"kind": "epoch", "epoch": 7, "num_epochs": 10, "avg_loss": 0.014048583048861474, "accuracy_pct": 99.7, "step": 224, "total_steps": 320, "time": "2025-10-24T16:20:59.992127", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [8/10] Batch [0/32] Loss: 0.0179
+METRIC:{"kind": "batch", "epoch": 8, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 0.017916936427354813, "accuracy": 1.0, "lr": 0.001, "step": 225, "total_steps": 320, "time": "2025-10-24T16:21:00.071952", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [8/10] Batch [10/32] Loss: 0.0034
+METRIC:{"kind": "batch", "epoch": 8, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 0.003353795036673546, "accuracy": 0.9971590909090909, "lr": 0.001, "step": 235, "total_steps": 320, "time": "2025-10-24T16:21:00.902529", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [8/10] Batch [20/32] Loss: 0.0145
+METRIC:{"kind": "batch", "epoch": 8, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 0.014544432982802391, "accuracy": 0.9985119047619048, "lr": 0.001, "step": 245, "total_steps": 320, "time": "2025-10-24T16:21:01.760811", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [8/10] Batch [30/32] Loss: 0.0025
+METRIC:{"kind": "batch", "epoch": 8, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 0.002460597548633814, "accuracy": 0.998991935483871, "lr": 0.001, "step": 255, "total_steps": 320, "time": "2025-10-24T16:21:02.564663", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 8/10 Complete:
+  Average Loss: 0.0101
+  Training Accuracy: 99.90%
+
+METRIC:{"kind": "epoch", "epoch": 8, "num_epochs": 10, "avg_loss": 0.010139415677258512, "accuracy_pct": 99.9, "step": 256, "total_steps": 320, "time": "2025-10-24T16:21:02.640834", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [9/10] Batch [0/32] Loss: 0.0079
+METRIC:{"kind": "batch", "epoch": 9, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 0.007866141386330128, "accuracy": 1.0, "lr": 0.001, "step": 257, "total_steps": 320, "time": "2025-10-24T16:21:02.714335", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [9/10] Batch [10/32] Loss: 0.0022
+METRIC:{"kind": "batch", "epoch": 9, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 0.002188003621995449, "accuracy": 1.0, "lr": 0.001, "step": 267, "total_steps": 320, "time": "2025-10-24T16:21:03.486836", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [9/10] Batch [20/32] Loss: 0.0013
+METRIC:{"kind": "batch", "epoch": 9, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 0.0012714568292722106, "accuracy": 1.0, "lr": 0.001, "step": 277, "total_steps": 320, "time": "2025-10-24T16:21:04.297536", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [9/10] Batch [30/32] Loss: 0.0061
+METRIC:{"kind": "batch", "epoch": 9, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 0.006094957701861858, "accuracy": 1.0, "lr": 0.001, "step": 287, "total_steps": 320, "time": "2025-10-24T16:21:05.115034", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 9/10 Complete:
+  Average Loss: 0.0057
+  Training Accuracy: 100.00%
+
+METRIC:{"kind": "epoch", "epoch": 9, "num_epochs": 10, "avg_loss": 0.005732804620492971, "accuracy_pct": 100.0, "step": 288, "total_steps": 320, "time": "2025-10-24T16:21:05.191551", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [10/10] Batch [0/32] Loss: 0.0193
+METRIC:{"kind": "batch", "epoch": 10, "num_epochs": 10, "batch_idx": 0, "num_batches": 32, "loss": 0.019325347617268562, "accuracy": 1.0, "lr": 0.001, "step": 289, "total_steps": 320, "time": "2025-10-24T16:21:05.291819", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [10/10] Batch [10/32] Loss: 0.0030
+METRIC:{"kind": "batch", "epoch": 10, "num_epochs": 10, "batch_idx": 10, "num_batches": 32, "loss": 0.003032857785001397, "accuracy": 1.0, "lr": 0.001, "step": 299, "total_steps": 320, "time": "2025-10-24T16:21:06.122041", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [10/10] Batch [20/32] Loss: 0.0053
+METRIC:{"kind": "batch", "epoch": 10, "num_epochs": 10, "batch_idx": 20, "num_batches": 32, "loss": 0.0053389230743050575, "accuracy": 1.0, "lr": 0.001, "step": 309, "total_steps": 320, "time": "2025-10-24T16:21:07.193879", "start_time": "2025-10-24T16:20:41.768067"}
+Epoch [10/10] Batch [30/32] Loss: 0.0024
+METRIC:{"kind": "batch", "epoch": 10, "num_epochs": 10, "batch_idx": 30, "num_batches": 32, "loss": 0.002373985480517149, "accuracy": 1.0, "lr": 0.001, "step": 319, "total_steps": 320, "time": "2025-10-24T16:21:07.998776", "start_time": "2025-10-24T16:20:41.768067"}
+
+Epoch 10/10 Complete:
+  Average Loss: 0.0049
+  Training Accuracy: 100.00%
+
+METRIC:{"kind": "epoch", "epoch": 10, "num_epochs": 10, "avg_loss": 0.004906973821562133, "accuracy_pct": 100.0, "step": 320, "total_steps": 320, "time": "2025-10-24T16:21:08.075549", "start_time": "2025-10-24T16:20:41.768067"}
+
+Model saved to: /home/def1ant1/PycharmProjects/SparkTrainer/models/55619d64-3c32-4862-9dd9-b48cd262de10
+Training completed successfully!

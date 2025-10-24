@@ -23,5 +23,47 @@
     "started": "2025-10-24T03:59:16.876787",
     "pid": 118508,
     "completed": "2025-10-24T03:59:17.855654"
+  },
+  "55619d64-3c32-4862-9dd9-b48cd262de10": {
+    "id": "55619d64-3c32-4862-9dd9-b48cd262de10",
+    "name": "moetest",
+    "type": "train",
+    "framework": "pytorch",
+    "status": "completed",
+    "created": "2025-10-24T16:20:40.885715",
+    "config": {
+      "epochs": 10,
+      "batch_size": 32,
+      "learning_rate": 0.001,
+      "architecture": "custom",
+      "input_size": 784,
+      "output_size": 10,
+      "hidden_layers": [
+        512,
+        256,
+        128
+      ],
+      "num_classes": 10,
+      "tracking": {
+        "wandb": true,
+        "tensorboard": true
+      }
+    },
+    "progress": 0,
+    "metrics": {},
+    "gpu": {
+      "type": "gpu",
+      "gpu_index": 0,
+      "gpu_uuid": "GPU-5f795298-d1d6-aedc-d49a-e6b97740b98c"
+    },
+    "priority": 0,
+    "depends_on": null,
+    "dataset_resolved_path": null,
+    "experiment": null,
+    "experiment_tags": [],
+    "experiment_notes": "",
+    "started": "2025-10-24T16:20:40.886180",
+    "pid": 393727,
+    "completed": "2025-10-24T16:21:08.250505"
   }
 }

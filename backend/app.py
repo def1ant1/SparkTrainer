@@ -14,6 +14,13 @@ import zipfile
 import io
 import re
 import shutil
+import hashlib
+import csv
+import random
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 
 app = Flask(__name__)
 CORS(app)
@@ -35,11 +42,13 @@ MODELS_DIR = _resolve_dir(os.environ.get('MODELS_DIR'), 'models')
 LOGS_DIR = _resolve_dir(os.environ.get('LOGS_DIR'), 'logs')
 TRAINING_SCRIPTS_DIR = _resolve_dir(os.environ.get('TRAINING_SCRIPTS_DIR'), 'training_scripts')
 DATASETS_DIR = _resolve_dir(os.environ.get('DATASETS_DIR'), 'datasets')
+EXPERIMENTS_DIR = _resolve_dir(os.environ.get('EXPERIMENTS_DIR'), os.path.join('jobs','experiments'))
 
 os.makedirs(JOBS_DIR, exist_ok=True)
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(DATASETS_DIR, exist_ok=True)
+os.makedirs(EXPERIMENTS_DIR, exist_ok=True)
 
 # In-memory job tracking
 jobs = {}
@@ -51,6 +60,24 @@ _metrics_history = deque(maxlen=max(10, METRICS_WINDOW_SECONDS // max(1, METRICS
 _metrics_thread = None
 _metrics_thread_started = False
 _metrics_lock = threading.Lock()
+_last_net_totals = {'rx': None, 'tx': None, 'ts': None}
+_last_io_totals = {'reads': None, 'writes': None, 'ts': None}
+_scheduler_started = False
+
+PIPELINES_PATH = os.path.join(JOBS_DIR, 'pipelines.json')
+SCHEDULES_PATH = os.path.join(JOBS_DIR, 'schedules.json')
+
+def _load_json(path: str, default: Any):
+    if os.path.exists(path):
+        try:
+            return json.load(open(path))
+        except Exception:
+            return default
+    return default
+
+def _save_json(path: str, data: Any):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
 
 def load_jobs():
     """Load existing jobs from disk"""
@@ -65,6 +92,89 @@ def save_jobs():
         json.dump(jobs, f, indent=2)
 
 jobs = load_jobs()
+
+# ------------ Experiments -------------
+_EXPS_INDEX = os.path.join(EXPERIMENTS_DIR, 'experiments.json')
+
+def _load_experiments() -> Dict[str, Any]:
+    if os.path.exists(_EXPS_INDEX):
+        try:
+            return json.load(open(_EXPS_INDEX))
+        except Exception:
+            return {}
+    return {}
+
+def _save_experiments(exps: Dict[str, Any]):
+    with open(_EXPS_INDEX, 'w', encoding='utf-8') as f:
+        json.dump(exps, f, indent=2)
+
+def _find_or_create_experiment_by_name(name: str, tags: list[str] | None = None, description: str | None = None) -> Dict[str, Any]:
+    exps = _load_experiments()
+    for eid, e in exps.items():
+        if str(e.get('name','')).strip().lower() == str(name).strip().lower():
+            return {'id': eid, **e}
+    eid = str(uuid.uuid4())
+    now = datetime.now().isoformat()
+    rec = {'id': eid, 'name': name, 'tags': tags or [], 'description': description or '', 'favorite': False, 'created': now, 'updated': now}
+    exps[eid] = rec
+    _save_experiments(exps)
+    return rec
+
+@app.route('/api/experiments', methods=['GET','POST'])
+def experiments_root():
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'name required'}), 400
+        rec = _find_or_create_experiment_by_name(name, data.get('tags') or [], data.get('description') or '')
+        return jsonify(rec), 201
+    # GET
+    exps = _load_experiments()
+    items = list(exps.values())
+    q = (request.args.get('q') or '').lower().strip()
+    if q:
+        items = [e for e in items if q in (e.get('name','').lower() + ' ' + (e.get('description','').lower()))]
+    # Attach run counts
+    runs_by_exp: Dict[str, int] = {}
+    for j in jobs.values():
+        eid = (j.get('experiment') or {}).get('id') if isinstance(j.get('experiment'), dict) else None
+        if eid:
+            runs_by_exp[eid] = runs_by_exp.get(eid, 0) + 1
+    for e in items:
+        e['run_count'] = runs_by_exp.get(e.get('id'), 0)
+    return jsonify({'items': items})
+
+@app.route('/api/experiments/<exp_id>', methods=['GET','PUT'])
+def experiments_detail(exp_id):
+    exps = _load_experiments()
+    if exp_id not in exps:
+        return jsonify({'error': 'Not found'}), 404
+    if request.method == 'PUT':
+        data = request.json or {}
+        e = exps[exp_id]
+        for k in ('name','description','tags','favorite'):
+            if k in data:
+                e[k] = data[k]
+        e['updated'] = datetime.now().isoformat()
+        exps[exp_id] = e
+        _save_experiments(exps)
+    runs = [j for j in jobs.values() if (isinstance(j.get('experiment'), dict) and j['experiment'].get('id') == exp_id)]
+    out = dict(exps[exp_id])
+    out['runs'] = runs
+    return jsonify(out)
+
+@app.route('/api/experiments/<exp_id>/star', methods=['POST'])
+def experiments_star(exp_id):
+    exps = _load_experiments()
+    if exp_id not in exps:
+        return jsonify({'error': 'Not found'}), 404
+    e = exps[exp_id]
+    e['favorite'] = bool((request.json or {}).get('favorite', True))
+    e['updated'] = datetime.now().isoformat()
+    exps[exp_id] = e
+    _save_experiments(exps)
+    return jsonify({'status': 'ok', 'favorite': e['favorite']})
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -100,6 +210,59 @@ def list_models():
     architecture = request.args.get('architecture')
     sort = request.args.get('sort') or 'date'  # date|size|accuracy|name
     order = request.args.get('order') or 'desc'  # asc|desc
+
+    def _size_category(params: int | None, size_bytes: int | None) -> str | None:
+        if params is not None:
+            try:
+                p = int(params)
+                if p < 100_000_000: return 'small'
+                if p < 500_000_000: return 'base'
+                if p < 2_000_000_000: return 'large'
+                return 'xl'
+            except Exception:
+                pass
+        if size_bytes is not None:
+            if size_bytes < 500*1024*1024: return 'small'
+            if size_bytes < 2*1024*1024*1024: return 'base'
+            if size_bytes < 8*1024*1024*1024: return 'large'
+            return 'xl'
+        return None
+
+    def _auto_tags(arch: str | None, cfg: Dict[str, Any], meta: Dict[str, Any]) -> list[str]:
+        tags = []
+        a = (arch or '').lower()
+        if any(k in a for k in ['bert','gpt','llama','t5','transformer','mpt','neox']):
+            tags.append('transformer')
+        if any(k in a for k in ['resnet','vgg','densenet','vit','conv','cnn']):
+            tags.append('vision')
+        task = (cfg.get('task_type') or meta.get('task_type') or '').lower()
+        if task:
+            if any(k in task for k in ['classif','cls']): tags.append('classification')
+            if any(k in task for k in ['causal','lm','generation']): tags.append('language-model')
+            if 'seg' in task: tags.append('segmentation')
+            if 'qa' in task: tags.append('qa')
+        dom = (meta.get('domain') or '').lower()
+        if dom: tags.append(dom)
+        return sorted(list(dict.fromkeys(tags)))
+
+    def _read_stats(path: str) -> Dict[str, Any]:
+        sp = os.path.join(path, 'stats.json')
+        if os.path.exists(sp):
+            try:
+                return json.load(open(sp))
+            except Exception:
+                return {}
+        return {}
+
+    def _card_text(path: str, limit: int = 800) -> str:
+        p = os.path.join(path, 'card.md')
+        if os.path.exists(p):
+            try:
+                t = open(p, 'r', encoding='utf-8').read()
+                return t[:limit]
+            except Exception:
+                return ''
+        return ''
 
     def load_model(model_dir):
         path = os.path.join(MODELS_DIR, model_dir)
@@ -138,6 +301,11 @@ def list_models():
                     total_size += os.path.getsize(os.path.join(root, fn))
                 except Exception:
                     pass
+        stats = _read_stats(path)
+        size_cat = _size_category(cfg.get('parameters'), total_size)
+        auto = _auto_tags(cfg.get('architecture') or meta.get('architecture'), cfg, meta)
+        license_name = meta.get('license') or cfg.get('license')
+        card_excerpt = _card_text(path)
         info.update({
             'name': cfg.get('name', model_dir),
             'framework': cfg.get('framework', meta.get('framework', 'unknown')),
@@ -145,8 +313,16 @@ def list_models():
             'created': cfg.get('created', meta.get('created')),
             'parameters': cfg.get('parameters'),
             'metrics': metrics,
-            'tags': meta.get('tags', []),
+            'tags': sorted(list(dict.fromkeys((meta.get('tags') or []) + auto))),
             'size_bytes': total_size,
+            'size_category': size_cat,
+            'license': license_name,
+            'popularity': {
+                'views': int(stats.get('views', 0)),
+                'exports': int(stats.get('exports', 0)),
+                'used_in_jobs': int(stats.get('used_in_jobs', 0)),
+            },
+            'card_excerpt': card_excerpt,
         })
         return info
 
@@ -163,17 +339,35 @@ def list_models():
             if q:
                 hay = ' '.join([
                     m.get('name') or '', m.get('framework') or '', m.get('architecture') or '',
-                    ' '.join(m.get('tags') or [])
+                    ' '.join(m.get('tags') or []),
+                    (m.get('card_excerpt') or '')
                 ]).lower()
                 if q not in hay:
                     continue
             items.append(m)
+
+    # Faceted filters
+    lic = (request.args.get('license') or '').strip().lower()
+    size_f = (request.args.get('size') or '').strip().lower()
+    tag_f = (request.args.get('tag') or '').strip().lower()
+    domain_f = (request.args.get('domain') or '').strip().lower()
+    if lic:
+        items = [m for m in items if (str(m.get('license') or '').lower() == lic)]
+    if size_f:
+        items = [m for m in items if (str(m.get('size_category') or '').lower() == size_f)]
+    if tag_f:
+        items = [m for m in items if tag_f in [str(t).lower() for t in (m.get('tags') or [])]]
+    if domain_f:
+        items = [m for m in items if domain_f in [str(t).lower() for t in (m.get('tags') or [])]]
 
     def sort_key(x):
         if sort == 'size':
             return x.get('size_bytes') or 0
         if sort == 'accuracy':
             return (x.get('metrics') or {}).get('eval_accuracy') or 0
+        if sort == 'popular':
+            p = x.get('popularity') or {}
+            return (p.get('views') or 0) + 2*(p.get('exports') or 0) + (p.get('used_in_jobs') or 0)
         if sort == 'name':
             return (x.get('name') or '').lower()
         # default date
@@ -253,9 +447,42 @@ def _model_detail(model_id: str) -> Dict[str, Any]:
 
 @app.route('/api/models/<model_id>', methods=['GET'])
 def get_model_detail(model_id):
-    if not os.path.isdir(os.path.join(MODELS_DIR, model_id)):
+    base = os.path.join(MODELS_DIR, model_id)
+    if not os.path.isdir(base):
         return jsonify({'error': 'Model not found'}), 404
-    return jsonify(_model_detail(model_id))
+    # increment view counter
+    try:
+        sp = os.path.join(base, 'stats.json')
+        stats = {}
+        if os.path.exists(sp):
+            try: stats = json.load(open(sp))
+            except Exception: stats = {}
+        stats['views'] = int(stats.get('views', 0)) + 1
+        with open(sp, 'w', encoding='utf-8') as f:
+            json.dump(stats, f)
+    except Exception:
+        pass
+    # enrich detail with assets
+    detail = _model_detail(model_id)
+    try:
+        images = []
+        videos = []
+        for sub in ('assets','screenshots','media'):
+            ap = os.path.join(base, sub)
+            if not os.path.isdir(ap):
+                continue
+            for r, _, fns in os.walk(ap):
+                for fn in fns:
+                    rel = os.path.relpath(os.path.join(r, fn), base).replace('\\','/')
+                    ext = os.path.splitext(fn)[1].lower()
+                    if ext in {'.png','.jpg','.jpeg','.gif'}:
+                        images.append(rel)
+                    if ext in {'.mp4','.webm','.mov'}:
+                        videos.append(rel)
+        detail['assets'] = {'images': images[:24], 'videos': videos[:8]}
+    except Exception:
+        detail['assets'] = {'images': [], 'videos': []}
+    return jsonify(detail)
 
 
 @app.route('/api/models/<model_id>/metadata', methods=['PUT'])
@@ -342,6 +569,18 @@ def export_models():
                         z.write(fp, arcname=arc)
                     except Exception:
                         pass
+            # increment export count
+            try:
+                sp = os.path.join(base, 'stats.json')
+                stats = {}
+                if os.path.exists(sp):
+                    try: stats = json.load(open(sp))
+                    except Exception: stats = {}
+                stats['exports'] = int(stats.get('exports', 0)) + 1
+                with open(sp, 'w', encoding='utf-8') as f:
+                    json.dump(stats, f)
+            except Exception:
+                pass
     mem.seek(0)
     return send_file(mem, mimetype='application/zip', as_attachment=True, download_name='models_export.zip')
 
@@ -361,6 +600,133 @@ def model_card_html(model_id):
     # simple html wrapper; for full markdown render, open in browser or export tool
     html = f"<html><head><meta charset='utf-8'><title>Model Card {model_id}</title></head><body><pre>{content}</pre></body></html>"
     return html
+
+
+@app.route('/api/models/<model_id>/file', methods=['GET'])
+def model_file_serve(model_id):
+    base = _model_dir(_safe_name(model_id))
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Model not found'}), 404
+    rel = request.args.get('path') or ''
+    p = os.path.normpath(os.path.join(base, rel))
+    if not p.startswith(base):
+        return jsonify({'error': 'Invalid path'}), 400
+    if not os.path.exists(p):
+        return jsonify({'error': 'Not found'}), 404
+    try:
+        return send_file(p)
+    except Exception as e:
+        return jsonify({'error': 'Failed to send', 'detail': str(e)}), 500
+
+
+@app.route('/api/models/<model_id>/evals', methods=['GET', 'POST'])
+def model_evals(model_id):
+    base = _model_dir(_safe_name(model_id))
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Model not found'}), 404
+    ev_path = os.path.join(base, 'evals.jsonl')
+    if request.method == 'POST':
+        data = request.json or {}
+        rec = {
+            'ts': datetime.now().isoformat(),
+            'name': data.get('name') or 'eval',
+            'metrics': data.get('metrics') or {},
+            'notes': data.get('notes') or '',
+        }
+        try:
+            with open(ev_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(rec) + '\n')
+            return jsonify({'status': 'ok'})
+        except Exception as e:
+            return jsonify({'error': 'Failed to save', 'detail': str(e)}), 500
+    # GET
+    items = []
+    if os.path.exists(ev_path):
+        try:
+            with open(ev_path, 'r', encoding='utf-8') as f:
+                for ln in f:
+                    try: items.append(json.loads(ln))
+                    except: pass
+        except Exception:
+            pass
+    return jsonify({'items': items})
+
+
+def _model_similarity(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    # Jaccard on tags + architecture + size_category
+    sa = set([str(a.get('architecture') or '').lower(), str(a.get('size_category') or '').lower()] + [str(t).lower() for t in (a.get('tags') or [])])
+    sb = set([str(b.get('architecture') or '').lower(), str(b.get('size_category') or '').lower()] + [str(t).lower() for t in (b.get('tags') or [])])
+    inter = len(sa & sb)
+    uni = len(sa | sb) or 1
+    return inter / uni
+
+
+@app.route('/api/models/<model_id>/similar', methods=['GET'])
+def similar_models(model_id):
+    # Build model list and compute similarity with given id.
+    base = os.path.join(MODELS_DIR, model_id)
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Model not found'}), 404
+    # Load models
+    models = []
+    for d in os.listdir(MODELS_DIR):
+        m = d
+        p = os.path.join(MODELS_DIR, m)
+        if not os.path.isdir(p):
+            continue
+        models.append(m)
+    def load_info(mid):
+        res = None
+        try:
+            # Reuse list_models loader by calling underlying helper again
+            # Duplicate lightweight reader
+            path = os.path.join(MODELS_DIR, mid)
+            cfg = {}
+            meta = {}
+            try:
+                cp = os.path.join(path, 'config.json')
+                if os.path.exists(cp): cfg = json.load(open(cp))
+            except Exception: pass
+            try:
+                mp = os.path.join(path, 'metadata.json')
+                if os.path.exists(mp): meta = json.load(open(mp))
+            except Exception: pass
+            # tags/arch/size
+            total_size = 0
+            for r,_,fns in os.walk(path):
+                for fn in fns:
+                    try: total_size += os.path.getsize(os.path.join(r,fn))
+                    except: pass
+            arch = cfg.get('architecture', meta.get('architecture'))
+            tags = (meta.get('tags') or [])
+            size_cat = None
+            try:
+                p = int(cfg.get('parameters')) if cfg.get('parameters') is not None else None
+            except Exception:
+                p = None
+            if p is not None:
+                if p < 100_000_000: size_cat='small'
+                elif p < 500_000_000: size_cat='base'
+                elif p < 2_000_000_000: size_cat='large'
+                else: size_cat='xl'
+            elif total_size:
+                if total_size < 500*1024*1024: size_cat='small'
+                elif total_size < 2*1024*1024*1024: size_cat='base'
+                elif total_size < 8*1024*1024*1024: size_cat='large'
+                else: size_cat='xl'
+            res = {'id': mid, 'architecture': arch, 'tags': tags, 'size_category': size_cat}
+        except Exception:
+            res = {'id': mid}
+        return res
+    infos = { mid: load_info(mid) for mid in models }
+    src = infos.get(model_id)
+    sims = []
+    if src:
+        for mid, info in infos.items():
+            if mid == model_id: continue
+            sims.append((mid, _model_similarity(src, info)))
+    sims.sort(key=lambda x: x[1], reverse=True)
+    return jsonify({'similar': [{'id': mid, 'score': float(f'{score:.3f}')} for mid, score in sims[:10]]})
 
 
 def _model_dir(model_id: str) -> str:
@@ -539,6 +905,31 @@ def get_job(job_id):
     return jsonify(job)
 
 
+@app.route('/api/jobs/<job_id>/experiment', methods=['PUT'])
+def job_set_experiment(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    data = request.json or {}
+    exp = data.get('experiment') or {}
+    if isinstance(exp, dict) and (exp.get('id') or exp.get('name')):
+        if exp.get('id'):
+            exps = _load_experiments()
+            e = exps.get(str(exp['id']))
+            if not e:
+                return jsonify({'error': 'Experiment not found'}), 404
+            job['experiment'] = {'id': e['id'], 'name': e['name']}
+        else:
+            e = _find_or_create_experiment_by_name(str(exp.get('name')), exp.get('tags') or [], exp.get('notes') or '')
+            job['experiment'] = {'id': e['id'], 'name': e['name']}
+    if 'experiment_tags' in data:
+        job['experiment_tags'] = data.get('experiment_tags') or []
+    if 'experiment_notes' in data:
+        job['experiment_notes'] = data.get('experiment_notes') or ''
+    save_jobs()
+    return jsonify({'status': 'ok', 'job': job})
+
+
 def _tail_file_lines(path: str, max_lines: int = 200):
     try:
         with open(path, 'rb') as f:
@@ -576,6 +967,22 @@ def job_metrics(job_id):
         return jsonify({'metrics': []})
     lines = _tail_file_lines(log_file, max_lines=2000)
     metrics = _parse_metrics_from_lines(lines)
+    if (request.args.get('export') or '').lower() == 'csv':
+        # Build CSV with union of keys
+        keys = []
+        for m in metrics:
+            for k in m.keys():
+                if k not in keys:
+                    keys.append(k)
+        import csv as _csv
+        from flask import Response
+        sio = io.StringIO()
+        w = _csv.DictWriter(sio, fieldnames=keys)
+        w.writeheader()
+        for m in metrics:
+            w.writerow({k: m.get(k) for k in keys})
+        data = sio.getvalue()
+        return Response(data, headers={'Content-Type':'text/csv','Content-Disposition':f'attachment; filename={job_id}.metrics.csv'})
     return jsonify({'metrics': metrics})
 
 
@@ -597,6 +1004,7 @@ def job_metrics_stream(job_id):
     return Response(gen(), headers=headers)
 
 
+[...]
 @app.route('/api/jobs/<job_id>/logs', methods=['GET'])
 def job_logs(job_id):
     log_file = os.path.join(LOGS_DIR, f'{job_id}.log')
@@ -837,6 +1245,20 @@ def create_job():
         except Exception:
             pass
 
+    # Attach experiment metadata (optional)
+    exp_meta = None
+    exp_in = data.get('experiment') or {}
+    if isinstance(exp_in, dict) and (exp_in.get('id') or exp_in.get('name')):
+        if exp_in.get('id'):
+            # ensure exists
+            exps = _load_experiments()
+            e = exps.get(str(exp_in['id']))
+            if e:
+                exp_meta = {'id': e['id'], 'name': e['name']}
+        else:
+            e = _find_or_create_experiment_by_name(str(exp_in.get('name')), exp_in.get('tags') or [], exp_in.get('notes') or '')
+            exp_meta = {'id': e['id'], 'name': e['name']}
+
     job = {
         'id': job_id,
         'name': data.get('name', f'Training Job {job_id[:8]}'),
@@ -851,10 +1273,27 @@ def create_job():
         'priority': data.get('priority', 0),
         'depends_on': data.get('depends_on'),
         'dataset_resolved_path': dataset_resolved_path,
+        'experiment': exp_meta,
+        'experiment_tags': (exp_in.get('tags') if isinstance(exp_in, dict) else None) or [],
+        'experiment_notes': (exp_in.get('notes') if isinstance(exp_in, dict) else None) or '',
     }
     
     jobs[job_id] = job
     save_jobs()
+    # model usage tracking (if job references a local model id)
+    try:
+        mid = (cfg or {}).get('model_id')
+        if mid and os.path.isdir(os.path.join(MODELS_DIR, _safe_name(str(mid)))):
+            sp = os.path.join(MODELS_DIR, _safe_name(str(mid)), 'stats.json')
+            stats = {}
+            if os.path.exists(sp):
+                try: stats = json.load(open(sp))
+                except Exception: stats = {}
+            stats['used_in_jobs'] = int(stats.get('used_in_jobs', 0)) + 1
+            with open(sp, 'w', encoding='utf-8') as f:
+                json.dump(stats, f)
+    except Exception:
+        pass
     
     # Start training in background thread unless blocked by dependencies
     def deps_done(dep_ids):
@@ -873,6 +1312,58 @@ def create_job():
         job['status'] = 'blocked'
     
     return jsonify(job), 201
+
+
+@app.route('/api/jobs/allocate', methods=['POST'])
+def jobs_allocate():
+    """Suggest a GPU/MIG allocation based on model config and available memory with 20% headroom.
+
+    Payload mirrors create_job. Returns: { gpu: {...}, rationale } or { error }.
+    """
+    data = request.json or {}
+    cfg = (data.get('config') or {})
+    bs = int((cfg.get('batch_size') or 8))
+    seq = int(((cfg.get('context_extension') or {}).get('rope') or {}).get('target_length') or 2048)
+    training = True
+    # Estimate params when framework is HF and model_name provided; else unknown
+    params = None
+    if data.get('framework') == 'huggingface' and cfg.get('model_name'):
+        # cannot fetch HF remotely; fallback
+        params = None
+    # Use local model_id if specified
+    model_id = cfg.get('model_id') or data.get('model_id')
+    if model_id:
+        est = _estimate_model_size_params(_model_dir(_safe_name(model_id)))
+        params = est.get('parameters') or params
+    mem = _estimate_memory_requirements(params, bs, seq, training)
+    need = mem['total_bytes'] * 1.2  # 20% headroom
+    # Detect partitions and GPU memory
+    parts = _detect_partitions()
+    # Best-effort memory per MIG profile
+    def mig_mem_gb(profile: str) -> int:
+        return _MIG_PROFILE_MEM_GB.get(str(profile).lower(), 0)
+    # Query GPUs total mem via nvidia-smi
+    gmem = {}
+    try:
+        out = subprocess.check_output(['nvidia-smi', '--query-gpu=index,memory.total', '--format=csv,noheader,nounits']).decode()
+        for line in out.strip().split('\n'):
+            idx_s, mib_s = [x.strip() for x in line.split(',')]
+            gmem[int(idx_s)] = int(mib_s) * 1024 * 1024
+    except Exception:
+        pass
+    # Prefer MIG instance that fits
+    for g in parts.get('gpus', []):
+        for inst in g.get('instances', []):
+            prof = inst.get('profile')
+            if mig_mem_gb(prof) * (1024**3) >= need and not inst.get('allocated_by_jobs'):
+                return jsonify({'gpu': {'type':'mig','gpu_index':g.get('index'),'gpu_uuid':g.get('uuid'),'mig_uuid':inst.get('uuid')}, 'rationale': f'MIG {prof} meets memory need'}), 200
+    # Else prefer full GPU that fits
+    for g in parts.get('gpus', []):
+        if not g.get('allocated_by_jobs'):
+            tot = gmem.get(g.get('index'))
+            if tot and tot >= need:
+                return jsonify({'gpu': {'type':'gpu','gpu_index':g.get('index'),'gpu_uuid':g.get('uuid')}, 'rationale': 'Full GPU meets memory need'}), 200
+    return jsonify({'error': 'No suitable GPU/MIG found', 'need_bytes': int(need)}), 200
 
 @app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
 def cancel_job(job_id):
@@ -905,16 +1396,62 @@ def run_training_job(job_id):
         job['status'] = 'running'
         job['started'] = datetime.now().isoformat()
         save_jobs()
-        
+        # Prepare model output dir and snapshot config/env
+        model_dir = os.path.join(MODELS_DIR, job_id)
+        os.makedirs(model_dir, exist_ok=True)
+        try:
+            with open(os.path.join(model_dir, 'config.json'), 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2)
+        except Exception:
+            pass
+        # Env snapshot
+        snap = {
+            'created': datetime.now().isoformat(),
+            'python_version': None,
+            'packages': [],
+            'cuda': {},
+            'system': _system_info_snapshot(),
+            'dataset_path': job.get('dataset_resolved_path'),
+        }
+        try:
+            import sys
+            snap['python_version'] = sys.version
+        except Exception:
+            pass
+        try:
+            out = subprocess.check_output(['pip','freeze'], stderr=subprocess.STDOUT)
+            snap['packages'] = out.decode(errors='ignore').splitlines()
+        except Exception:
+            pass
+        try:
+            out = subprocess.check_output(['nvidia-smi','--query-gpu=driver_version,cuda_version','--format=csv,noheader'], stderr=subprocess.STDOUT).decode()
+            parts = out.strip().split('\n')[0].split(',')
+            if len(parts) >= 2:
+                snap['cuda'] = {'driver_version': parts[0].strip(), 'cuda_version': parts[1].strip()}
+        except Exception:
+            pass
+        try:
+            with open(os.path.join(model_dir, 'env.json'), 'w', encoding='utf-8') as f:
+                json.dump(snap, f, indent=2)
+        except Exception:
+            pass
+
         # Prepare training command
         script_path = TRAINING_SCRIPTS_DIR
         
         if job['type'] == 'train':
-            script = os.path.join(script_path, f"train_{job['framework']}.py")
+            # Route to HPO for PyTorch if enabled
+            cfg = job.get('config') or {}
+            if job['framework'] == 'pytorch' and isinstance(cfg.get('hpo'), dict) and cfg['hpo'].get('enabled'):
+                script = os.path.join(script_path, 'hpo_optuna_torch.py')
+            else:
+                script = os.path.join(script_path, f"train_{job['framework']}.py")
         else:
             # Prefer context extension script when enabled for HF
             cfg = job.get('config') or {}
-            if job['framework'] == 'huggingface' and isinstance(cfg.get('context_extension'), dict) and cfg['context_extension'].get('enabled'):
+            if job['framework'] == 'huggingface' and isinstance(cfg.get('hpo'), dict) and cfg['hpo'].get('enabled'):
+                script = os.path.join(script_path, 'hpo_optuna_hf.py')
+            elif job['framework'] == 'huggingface' and isinstance(cfg.get('context_extension'), dict) and cfg['context_extension'].get('enabled'):
                 script = os.path.join(script_path, 'context_extension_hf.py')
             else:
                 script = os.path.join(script_path, f"finetune_{job['framework']}.py")
@@ -939,6 +1476,16 @@ def run_training_job(job_id):
                     env['CUDA_VISIBLE_DEVICES'] = gpu_meta['gpu_uuid']
                 elif gpu_meta.get('gpu_index') is not None:
                     env['CUDA_VISIBLE_DEVICES'] = str(gpu_meta['gpu_index'])
+
+            # Apply tracking env overrides from job config (e.g., MLFLOW_TRACKING_URI, WANDB_API_KEY)
+            try:
+                tr_env = ((config.get('tracking') or {}).get('env') or {})
+                if isinstance(tr_env, dict):
+                    for k, v in tr_env.items():
+                        if isinstance(k, str) and v is not None:
+                            env[str(k)] = str(v)
+            except Exception:
+                pass
 
             process = subprocess.Popen(
                 cmd,
@@ -1151,7 +1698,7 @@ def _system_info_snapshot() -> Dict[str, Any]:
     except Exception:
         base['disks'] = []
 
-    # Net totals via /proc/net/dev
+    # Net totals via /proc/net/dev (+rates)
     try:
         rx = tx = 0
         with open('/proc/net/dev', 'r') as f:
@@ -1168,7 +1715,14 @@ def _system_info_snapshot() -> Dict[str, Any]:
                 # include all interfaces, including loopback for completeness
                 rx += rx_bytes
                 tx += tx_bytes
-        base['net'] = {'rx_bytes': rx, 'tx_bytes': tx}
+        now = time.time()
+        rate_rx = rate_tx = 0.0
+        if _last_net_totals['rx'] is not None and _last_net_totals['ts'] is not None:
+            dt = max(1e-6, now - _last_net_totals['ts'])
+            rate_rx = (rx - _last_net_totals['rx']) / dt
+            rate_tx = (tx - _last_net_totals['tx']) / dt
+        _last_net_totals.update({'rx': rx, 'tx': tx, 'ts': now})
+        base['net'] = {'rx_bytes': rx, 'tx_bytes': tx, 'rx_rate_bps': int(rate_rx), 'tx_rate_bps': int(rate_tx)}
     except Exception:
         base['net'] = {}
     # Active GPU allocations derived from jobs metadata
@@ -1213,6 +1767,12 @@ def _dataset_version_dir(name: str, version: str | None = None) -> str:
         return base
     subs.sort(key=lambda d: os.path.getmtime(os.path.join(base, d)), reverse=True)
     return os.path.join(base, subs[0])
+
+
+def _uploads_dir() -> str:
+    p = os.path.join(DATASETS_DIR, '_uploads')
+    os.makedirs(p, exist_ok=True)
+    return p
 
 
 def _compute_dataset_stats(root: str) -> Dict[str, Any]:
@@ -1282,11 +1842,17 @@ def list_datasets():
                 'image_count': 0,
                 'healthy': False,
             }
+            # DVC detection
+            dvc_detected = False
+            try:
+                dvc_detected = os.path.exists(os.path.join(p, 'dvc.yaml')) or os.path.exists(os.path.join(p, '.dvc')) or any(fn.endswith('.dvc') for fn in os.listdir(p))
+            except Exception:
+                dvc_detected = False
             items.append({
                 'name': nm,
                 'latest': latest,
                 'versions': len(versions),
-                'meta': meta,
+                'meta': { **meta, **({'dvc_detected': True} if dvc_detected else {}) },
                 'stats': stats,
             })
     return jsonify(items)
@@ -1315,7 +1881,36 @@ def dataset_detail(name):
             meta = json.load(open(meta_path))
         except Exception:
             meta = {}
+    # DVC detection for detail
+    try:
+        dvc_detected = os.path.exists(os.path.join(base, 'dvc.yaml')) or os.path.exists(os.path.join(base, '.dvc')) or any(fn.endswith('.dvc') for fn in os.listdir(base))
+    except Exception:
+        dvc_detected = False
+    if dvc_detected:
+        meta['dvc_detected'] = True
     return jsonify({'name': name, 'meta': meta, 'versions': out_vers})
+
+
+@app.route('/api/datasets/<name>/metadata', methods=['PUT'])
+def dataset_update_metadata(name):
+    name = _safe_name(name)
+    base = _dataset_dir(name)
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Dataset not found'}), 404
+    data = request.json or {}
+    meta_path = os.path.join(base, 'metadata.json')
+    cur = {}
+    if os.path.exists(meta_path):
+        try:
+            cur = json.load(open(meta_path))
+        except Exception:
+            cur = {}
+    for k in ('description','tags','categories','type'):
+        if k in data:
+            cur[k] = data.get(k)
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(cur, f, indent=2)
+    return jsonify({'status': 'ok', 'metadata': cur})
 
 
 @app.route('/api/datasets/upload', methods=['POST'])
@@ -1351,6 +1946,282 @@ def dataset_upload():
     return jsonify({'status': 'ok', 'name': name, 'version': version, 'extracted': extracted, 'stats': stats})
 
 
+# Streaming ingestion for large files
+@app.route('/api/datasets/ingest/stream_start', methods=['POST'])
+def datasets_ingest_stream_start():
+    """Start a streaming upload session.
+
+    JSON: { name, version?, filename, total_size?, type?("csv"|"jsonl") }
+    Returns: { session, path }
+    """
+    data = request.json or {}
+    name = _safe_name(data.get('name') or '')
+    if not name:
+        return jsonify({'error': 'Missing name'}), 400
+    version = _safe_name(data.get('version') or datetime.now().strftime('%Y%m%d-%H%M%S'))
+    filename = data.get('filename') or 'upload.bin'
+    sess = str(uuid.uuid4())
+    sess_dir = os.path.join(_uploads_dir(), sess)
+    os.makedirs(sess_dir, exist_ok=True)
+    # Store session metadata
+    meta = {
+        'name': name,
+        'version': version,
+        'filename': filename,
+        'type': (data.get('type') or '').lower(),
+        'created': datetime.now().isoformat(),
+    }
+    with open(os.path.join(sess_dir, 'meta.json'), 'w', encoding='utf-8') as f:
+        json.dump(meta, f)
+    # Ensure chunk file exists
+    open(os.path.join(sess_dir, 'chunks.part'), 'ab').close()
+    return jsonify({'session': sess, 'path': f"{sess_dir}"})
+
+
+@app.route('/api/datasets/ingest/stream_chunk', methods=['POST'])
+def datasets_ingest_stream_chunk():
+    """Append a chunk to an existing session.
+
+    form-data: session, index, file (chunk)
+    """
+    sess = request.form.get('session') or ''
+    if not sess or 'file' not in request.files:
+        return jsonify({'error': 'Missing session or file'}), 400
+    sess_dir = os.path.join(_uploads_dir(), _safe_name(sess))
+    if not os.path.isdir(sess_dir):
+        return jsonify({'error': 'Session not found'}), 404
+    chunk = request.files['file']
+    try:
+        with open(os.path.join(sess_dir, 'chunks.part'), 'ab') as f:
+            f.write(chunk.read())
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        return jsonify({'error': 'Write failed', 'detail': str(e)}), 500
+
+
+@app.route('/api/datasets/ingest/stream_finalize', methods=['POST'])
+def datasets_ingest_stream_finalize():
+    """Finalize a session: map uploaded CSV/JSONL to dataset JSONL on server side without loading into memory.
+
+    JSON: { session, mapping:{ new: src }, header?: [csv headers], type?: 'csv'|'jsonl' }
+    Returns: { status, name, version, out }
+    """
+    data = request.json or {}
+    sess = _safe_name(data.get('session') or '')
+    if not sess:
+        return jsonify({'error': 'Missing session'}), 400
+    sess_dir = os.path.join(_uploads_dir(), sess)
+    meta_path = os.path.join(sess_dir, 'meta.json')
+    if not os.path.exists(meta_path):
+        return jsonify({'error': 'Session not found'}), 404
+    meta = json.load(open(meta_path))
+    name = meta['name']
+    version = meta['version']
+    typ = (data.get('type') or meta.get('type') or '').lower()
+    mapping = data.get('mapping') or {}
+    header = data.get('header') or []
+    src_file = os.path.join(sess_dir, 'chunks.part')
+    dst_dir = _dataset_version_dir(name, version)
+    os.makedirs(dst_dir, exist_ok=True)
+    outp = os.path.join(dst_dir, 'data.jsonl')
+    try:
+        with open(outp, 'w', encoding='utf-8') as out_f:
+            if typ == 'csv':
+                # Stream CSV rows
+                with open(src_file, 'r', encoding='utf-8', errors='ignore', newline='') as f:
+                    reader = csv.reader(f)
+                    hdr = header or (next(reader, []) or [])
+                    for row in reader:
+                        row_map = { hdr[i]: row[i] for i in range(min(len(hdr), len(row))) }
+                        obj = { k: row_map.get(v) for k, v in mapping.items() } if mapping else row_map
+                        out_f.write(json.dumps(obj, ensure_ascii=False) + '\n')
+            elif typ == 'jsonl':
+                with open(src_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    for ln in f:
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        try:
+                            r = json.loads(ln)
+                        except Exception:
+                            continue
+                        obj = { k: r.get(v) for k, v in mapping.items() } if mapping else r
+                        out_f.write(json.dumps(obj, ensure_ascii=False) + '\n')
+            else:
+                return jsonify({'error': 'Unsupported type'}), 400
+        # Clean up session dir
+        try:
+            shutil.rmtree(sess_dir, ignore_errors=True)
+        except Exception:
+            pass
+        stats = _compute_dataset_stats(dst_dir)
+        return jsonify({'status': 'ok', 'name': name, 'version': version, 'path': outp, 'stats': stats})
+    except Exception as e:
+        return jsonify({'error': 'Finalize failed', 'detail': str(e)}), 500
+
+
+@app.route('/api/datasets/<name>/samples', methods=['GET'])
+def dataset_samples(name):
+    name = _safe_name(name)
+    version = _safe_name(request.args.get('version') or '')
+    kind = (request.args.get('kind') or 'any').lower()  # any|image|text
+    offset = int(request.args.get('offset') or 0)
+    limit = int(request.args.get('limit') or 24)
+    root = _dataset_version_dir(name, version if version else None)
+    if not os.path.isdir(root):
+        return jsonify({'error': 'Not found'}), 404
+    image_exts = {'.jpg','.jpeg','.png','.bmp','.gif'}
+    text_exts = {'.txt','.json','.jsonl','.csv'}
+    files = []
+    for r, _, fns in os.walk(root):
+        for fn in fns:
+            ext = os.path.splitext(fn)[1].lower()
+            p = os.path.join(r, fn)
+            rel = os.path.relpath(p, root).replace('\\','/')
+            fkind = 'image' if ext in image_exts else ('text' if ext in text_exts else 'other')
+            if kind != 'any' and fkind != kind:
+                continue
+            try:
+                sz = os.path.getsize(p)
+            except Exception:
+                sz = None
+            files.append({'path': rel, 'kind': fkind, 'size': sz})
+    files.sort(key=lambda x: x['path'])
+    return jsonify({'total': len(files), 'items': files[offset:offset+limit]})
+
+
+@app.route('/api/datasets/<name>/file', methods=['GET'])
+def dataset_file(name):
+    name = _safe_name(name)
+    version = _safe_name(request.args.get('version') or '')
+    rel = request.args.get('path') or ''
+    root = _dataset_version_dir(name, version if version else None)
+    p = os.path.normpath(os.path.join(root, rel))
+    if not p.startswith(root):
+        return jsonify({'error': 'Invalid path'}), 400
+    if not os.path.isfile(p):
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(p)
+
+
+@app.route('/api/datasets/<name>/version/create', methods=['POST'])
+def dataset_version_create(name):
+    name = _safe_name(name)
+    data = request.json or {}
+    base_ver = _safe_name(data.get('base') or '')
+    new_ver = _safe_name(data.get('new') or '')
+    if not new_ver:
+        return jsonify({'error': 'Missing new version name'}), 400
+    src = _dataset_version_dir(name, base_ver if base_ver else None)
+    dst = _dataset_version_dir(name, new_ver)
+    if not os.path.isdir(src):
+        return jsonify({'error': 'Base version not found'}), 404
+    if os.path.exists(dst):
+        return jsonify({'error': 'New version already exists'}), 400
+    try:
+        shutil.copytree(src, dst)
+        return jsonify({'status': 'ok', 'version': new_ver})
+    except Exception as e:
+        return jsonify({'error': 'Copy failed', 'detail': str(e)}), 500
+
+
+@app.route('/api/datasets/<name>/version/diff', methods=['POST'])
+def dataset_version_diff(name):
+    name = _safe_name(name)
+    data = request.json or {}
+    a = _safe_name(data.get('a') or '')
+    b = _safe_name(data.get('b') or '')
+    if not a or not b:
+        return jsonify({'error': 'Missing versions'}), 400
+    ra = _dataset_version_dir(name, a)
+    rb = _dataset_version_dir(name, b)
+    if not os.path.isdir(ra) or not os.path.isdir(rb):
+        return jsonify({'error': 'Version not found'}), 404
+    def map_files(root):
+        m = {}
+        for r, _, fns in os.walk(root):
+            for fn in fns:
+                p = os.path.join(r, fn)
+                rel = os.path.relpath(p, root).replace('\\','/')
+                try:
+                    m[rel] = os.path.getsize(p)
+                except Exception:
+                    m[rel] = None
+        return m
+    ma = map_files(ra); mb = map_files(rb)
+    added = [k for k in mb.keys() if k not in ma]
+    removed = [k for k in ma.keys() if k not in mb]
+    changed = [k for k in mb.keys() if k in ma and ma[k] != mb[k]]
+    return jsonify({'a': a, 'b': b, 'added': added, 'removed': removed, 'changed': changed})
+
+
+@app.route('/api/datasets/<name>/version/rollback', methods=['POST'])
+def dataset_version_rollback(name):
+    name = _safe_name(name)
+    data = request.json or {}
+    target = _safe_name(data.get('target') or '')
+    if not target:
+        return jsonify({'error': 'Missing target'}), 400
+    new_ver = f"rollback-{target}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    # copy target to new_ver
+    src = _dataset_version_dir(name, target)
+    if not os.path.isdir(src):
+        return jsonify({'error': 'Target version not found'}), 404
+    dst = _dataset_version_dir(name, new_ver)
+    if os.path.exists(dst):
+        return jsonify({'error': 'Rollback version already exists'}), 400
+    try:
+        shutil.copytree(src, dst)
+        return jsonify({'status': 'ok', 'version': new_ver, 'from': target})
+    except Exception as e:
+        return jsonify({'error': 'Rollback failed', 'detail': str(e)}), 500
+
+
+@app.route('/api/datasets/template', methods=['POST'])
+def dataset_create_template():
+    data = request.json or {}
+    name = _safe_name(data.get('name') or '')
+    typ = (data.get('template') or 'image_classification').lower()
+    if not name:
+        return jsonify({'error': 'Missing name'}), 400
+    version = data.get('version') or 'v1'
+    base = _dataset_version_dir(name, version)
+    try:
+        os.makedirs(base, exist_ok=False)
+    except FileExistsError:
+        return jsonify({'error': 'Dataset/version already exists'}), 400
+    # Create skeleton
+    if typ == 'image_classification':
+        # base/class_{0,1}/img_*.png (placeholders)
+        for cls in ('class_a','class_b'):
+            d = os.path.join(base, cls); os.makedirs(d, exist_ok=True)
+            open(os.path.join(d,'README.txt'),'w').write('Put images of '+cls)
+    elif typ == 'text_generation':
+        open(os.path.join(base,'data.jsonl'),'w').write('\n'.join([
+            json.dumps({'text': 'Hello world'}),
+            json.dumps({'text': 'Goodbye world'})
+        ]))
+    elif typ == 'qa':
+        open(os.path.join(base,'qa.jsonl'),'w').write('\n'.join([
+            json.dumps({'question': 'What is the capital of France?', 'answer': 'Paris'}),
+            json.dumps({'question': '2+2?', 'answer': '4'})
+        ]))
+    elif typ == 'instruction_tuning':
+        open(os.path.join(base,'instructions.jsonl'),'w').write('\n'.join([
+            json.dumps({'instruction': 'Summarize the text', 'input': 'Long text here', 'output': 'Summary'}),
+            json.dumps({'instruction': 'Translate to German', 'input': 'Hello', 'output': 'Hallo'})
+        ]))
+    elif typ == 'conversational':
+        open(os.path.join(base,'conversations.jsonl'),'w').write('\n'.join([
+            json.dumps({'messages': [{'role':'user','content':'Hi'},{'role':'assistant','content':'Hello!'}]}),
+        ]))
+    # Write metadata
+    meta = {'type': typ, 'tags': [typ.replace('_',' ')], 'created': datetime.now().isoformat()}
+    with open(os.path.join(_dataset_dir(name),'metadata.json'), 'w') as f:
+        json.dump(meta, f, indent=2)
+    return jsonify({'status': 'ok', 'name': name, 'version': version, 'meta': meta})
+
+
 @app.route('/api/datasets/<name>/download', methods=['GET'])
 def dataset_download(name):
     name = _safe_name(name)
@@ -1384,6 +2255,419 @@ def dataset_validate(name):
     if stats['total_files'] == 0:
         issues.append('Dataset contains no files')
     return jsonify({'name': name, 'version': os.path.basename(root), 'stats': stats, 'issues': issues})
+
+
+@app.route('/api/datasets/<name>/quality', methods=['GET'])
+def dataset_quality(name):
+    name = _safe_name(name)
+    version = _safe_name(request.args.get('version') or '')
+    root = _dataset_version_dir(name, version if version else None)
+    if not os.path.isdir(root):
+        return jsonify({'error': 'Not found'}), 404
+    # Exact duplicate detection via md5 of first N MiB (fast path)
+    limit = int(request.args.get('limit') or 10000)
+    include_near = (request.args.get('near') or '0') in ('1','true','yes')
+    near_thresh = int(request.args.get('near_thresh') or 6)
+    hashes = {}
+    dup_groups = {}
+    ahashes = []  # (hash_int, relpath)
+    for idx, (r, _, fns) in enumerate(os.walk(root)):
+        for fn in fns:
+            fp = os.path.join(r, fn)
+            try:
+                h = hashlib.md5()
+                with open(fp, 'rb') as f:
+                    h.update(f.read(2*1024*1024))  # first 2 MiB
+                digest = h.hexdigest()
+                rel = os.path.relpath(fp, root).replace('\\','/')
+                hashes.setdefault(digest, []).append(rel)
+                # Perceptual aHash for images
+                ext = os.path.splitext(fn)[1].lower()
+                if include_near and Image is not None and ext in {'.jpg','.jpeg','.png','.bmp','.gif'}:
+                    try:
+                        with Image.open(fp) as im:
+                            im = im.convert('L').resize((8,8))
+                            pix = list(im.getdata())
+                            avg = sum(pix)/len(pix)
+                            bits = 0
+                            for i,pv in enumerate(pix):
+                                if pv >= avg:
+                                    bits |= (1 << i)
+                            ahashes.append((bits, rel))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            if len(hashes) > limit:
+                break
+    for k, paths in hashes.items():
+        if len(paths) > 1:
+            dup_groups[k] = paths
+    near_groups = []
+    if include_near and ahashes:
+        # Bucket by top 12 bits to reduce comparisons
+        buckets = {}
+        for hv, rel in ahashes:
+            buckets.setdefault(hv >> 52, []).append((hv, rel))
+        def hamming(a,b):
+            return bin(a ^ b).count('1')
+        visited = set()
+        for _, items in buckets.items():
+            n = len(items)
+            for i in range(n):
+                if items[i][1] in visited:
+                    continue
+                group = [items[i][1]]
+                for j in range(i+1, n):
+                    if hamming(items[i][0], items[j][0]) <= near_thresh:
+                        group.append(items[j][1])
+                        visited.add(items[j][1])
+                if len(group) > 1:
+                    near_groups.append(group)
+    # Class counts (image classification style) by top-level subfolders
+    class_counts = {}
+    for d in os.listdir(root):
+        p = os.path.join(root, d)
+        if os.path.isdir(p):
+            cnt = 0
+            for _, _, fns in os.walk(p):
+                cnt += len(fns)
+            class_counts[d] = cnt
+    # Imbalance warning
+    total = sum(class_counts.values()) or 1
+    ratios = {k: v/total for k,v in class_counts.items()} if class_counts else {}
+    max_cls = max(ratios.items(), key=lambda x:x[1])[0] if ratios else None
+    imbalance = None
+    if ratios and (max(ratios.values()) > 0.8 or (len(ratios)>=2 and (max(ratios.values())/max(1e-6, min(ratios.values()))) > 10)):
+        imbalance = {'message': f'Class imbalance detected; class {max_cls} dominates', 'ratios': ratios}
+    # Suggestions
+    suggestions = {}
+    dup_remove = []
+    for paths in dup_groups.values():
+        if len(paths) > 1:
+            dup_remove.extend(paths[1:])
+    suggestions['duplicates_to_remove'] = dup_remove
+    if class_counts:
+        counts = list(class_counts.values())
+        median = sorted(counts)[len(counts)//2]
+        suggestions['balance_plan'] = { c: min(median, n) for c, n in class_counts.items() }
+    return jsonify({'duplicates': dup_groups, 'near_duplicates': near_groups, 'class_counts': class_counts, 'imbalance': imbalance, 'suggestions': suggestions})
+
+
+@app.route('/api/datasets/<name>/quality/apply', methods=['POST'])
+def dataset_quality_apply(name):
+    """Apply quality suggestions by moving files to a quarantine folder.
+
+    JSON: { version, remove?: [paths], balance?: {class: target_count} }
+    """
+    name = _safe_name(name)
+    data = request.json or {}
+    version = _safe_name(data.get('version') or '')
+    base = _dataset_version_dir(name, version if version else None)
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Not found'}), 404
+    quarantine = os.path.join(base, '_quarantine')
+    os.makedirs(quarantine, exist_ok=True)
+    removed = []
+    for rel in data.get('remove') or []:
+        src = os.path.join(base, rel)
+        if os.path.exists(src):
+            dst = os.path.join(quarantine, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            try:
+                shutil.move(src, dst)
+                removed.append(rel)
+            except Exception:
+                pass
+    balanced = {}
+    for cls, target in (data.get('balance') or {}).items():
+        cls_dir = os.path.join(base, cls)
+        if not os.path.isdir(cls_dir):
+            continue
+        files = []
+        for r, _, fns in os.walk(cls_dir):
+            for fn in fns:
+                files.append(os.path.join(r, fn))
+        if len(files) <= int(target):
+            continue
+        extra = files[int(target):]
+        moved = []
+        for fp in extra:
+            rel = os.path.relpath(fp, base)
+            dst = os.path.join(quarantine, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            try:
+                shutil.move(fp, dst)
+                moved.append(rel)
+            except Exception:
+                pass
+        balanced[cls] = {'moved': len(moved)}
+    return jsonify({'status': 'ok', 'removed': removed, 'balanced': balanced})
+
+
+@app.route('/api/datasets/ingest/preview', methods=['POST'])
+def datasets_ingest_preview():
+    data = request.json or {}
+    typ = (data.get('type') or '').lower()
+    text = data.get('text') or ''
+    out = {'type': typ, 'columns': [], 'rows': []}
+    try:
+        if typ == 'csv':
+            reader = csv.reader(text.splitlines())
+            rows = list(reader)[:6]
+            if rows:
+                out['columns'] = rows[0]
+                out['rows'] = rows[1:]
+        elif typ == 'jsonl':
+            rows = [json.loads(ln) for ln in text.splitlines() if ln.strip()][:6]
+            cols = set()
+            for r in rows: cols.update(r.keys())
+            out['columns'] = sorted(cols)
+            out['rows'] = rows
+        else:
+            return jsonify({'error':'Unsupported type'}), 400
+    except Exception as e:
+        return jsonify({'error':'Parse failed','detail':str(e)}), 400
+    return jsonify(out)
+
+
+@app.route('/api/datasets/ingest/apply', methods=['POST'])
+def datasets_ingest_apply():
+    data = request.json or {}
+    name = _safe_name(data.get('name') or '')
+    version = _safe_name(data.get('version') or datetime.now().strftime('%Y%m%d-%H%M%S'))
+    typ = (data.get('type') or '').lower()
+    mapping = data.get('mapping') or {}  # { new_field: source_field }
+    rows = data.get('rows') or []  # for small in-memory apply
+    if not name:
+        return jsonify({'error':'Missing name'}), 400
+    dst = _dataset_version_dir(name, version)
+    os.makedirs(dst, exist_ok=True)
+    outp = os.path.join(dst, 'data.jsonl')
+    try:
+        with open(outp, 'w', encoding='utf-8') as f:
+            for r in rows:
+                if typ == 'csv' and isinstance(r, list):
+                    # assume header provided in mapping.source_header
+                    header = data.get('header') or []
+                    row_map = { header[i]: r[i] for i in range(min(len(header), len(r))) }
+                    obj = { k: row_map.get(v) for k, v in mapping.items() } if mapping else row_map
+                elif typ == 'jsonl' and isinstance(r, dict):
+                    obj = { k: r.get(v) for k, v in mapping.items() } if mapping else r
+                else:
+                    obj = r
+                f.write(json.dumps(obj, ensure_ascii=False) + '\n')
+        return jsonify({'status':'ok','name': name, 'version': version, 'path': outp})
+    except Exception as e:
+        return jsonify({'error':'Failed to write','detail':str(e)}), 500
+
+
+@app.route('/api/datasets/<name>/annotations', methods=['GET'])
+def dataset_annotations_get(name):
+    name = _safe_name(name)
+    version = _safe_name(request.args.get('version') or '')
+    base = _dataset_version_dir(name, version if version else None)
+    p = os.path.join(base, 'annotations.jsonl')
+    items = []
+    if os.path.exists(p):
+        try:
+            with open(p,'r',encoding='utf-8') as f:
+                for ln in f:
+                    try: items.append(json.loads(ln))
+                    except: pass
+        except Exception:
+            pass
+    return jsonify({'items': items})
+
+
+@app.route('/api/datasets/<name>/annotations/save', methods=['POST'])
+def dataset_annotations_save(name):
+    name = _safe_name(name)
+    data = request.json or {}
+    version = _safe_name(data.get('version') or '')
+    base = _dataset_version_dir(name, version if version else None)
+    if not os.path.isdir(base):
+        return jsonify({'error':'Version not found'}), 404
+    items = data.get('items') or []
+    p = os.path.join(base, 'annotations.jsonl')
+    try:
+        with open(p,'w',encoding='utf-8') as f:
+            for it in items:
+                f.write(json.dumps(it, ensure_ascii=False)+'\n')
+        return jsonify({'status':'ok','saved': len(items)})
+    except Exception as e:
+        return jsonify({'error':'Save failed','detail':str(e)}), 500
+
+
+@app.route('/api/datasets/<name>/annotations/export/yolo', methods=['GET'])
+def dataset_annotations_export_yolo(name):
+    name = _safe_name(name)
+    version = _safe_name(request.args.get('version') or '')
+    base = _dataset_version_dir(name, version if version else None)
+    ann_path = os.path.join(base, 'annotations.jsonl')
+    if not os.path.exists(ann_path):
+        return jsonify({'error': 'No annotations found'}), 404
+    items = []
+    labels = set()
+    with open(ann_path, 'r', encoding='utf-8') as f:
+        for ln in f:
+            try:
+                obj = json.loads(ln)
+                if obj.get('bboxes'):
+                    items.append(obj)
+                    for b in obj['bboxes']:
+                        if 'label' in b: labels.add(b['label'])
+            except Exception:
+                continue
+    classes = sorted(labels)
+    class_to_id = { c:i for i,c in enumerate(classes) }
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('classes.txt', '\n'.join(classes).encode('utf-8'))
+        for it in items:
+            ipath = os.path.join(base, it['path'])
+            w = h = None
+            if Image is not None and os.path.exists(ipath):
+                try:
+                    with Image.open(ipath) as im:
+                        w, h = im.size
+                except Exception:
+                    pass
+            if not w or not h:
+                w = (it.get('image_size') or {}).get('w')
+                h = (it.get('image_size') or {}).get('h')
+            if not w or not h:
+                continue
+            lines = []
+            for b in it.get('bboxes') or []:
+                cx = (b['x'] + b['w']/2.0) / max(1.0, w)
+                cy = (b['y'] + b['h']/2.0) / max(1.0, h)
+                nw = b['w'] / max(1.0, w)
+                nh = b['h'] / max(1.0, h)
+                cls = class_to_id.get(b.get('label'), 0)
+                lines.append(f"{cls} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+            rel = it['path']
+            lbl_path = f"labels/{os.path.splitext(rel.replace('\\\\','/').replace('\\','/'))[0]}.txt"
+            z.writestr(lbl_path, ('\n'.join(lines)+'\n').encode('utf-8'))
+    mem.seek(0)
+    return send_file(mem, mimetype='application/zip', as_attachment=True, download_name=f"{name}_{version or 'latest'}_yolo.zip")
+
+
+@app.route('/api/datasets/<name>/annotations/export/coco', methods=['GET'])
+def dataset_annotations_export_coco(name):
+    name = _safe_name(name)
+    version = _safe_name(request.args.get('version') or '')
+    base = _dataset_version_dir(name, version if version else None)
+    ann_path = os.path.join(base, 'annotations.jsonl')
+    if not os.path.exists(ann_path):
+        return jsonify({'error': 'No annotations found'}), 404
+    items = []
+    labels = set()
+    with open(ann_path, 'r', encoding='utf-8') as f:
+        for ln in f:
+            try:
+                obj = json.loads(ln)
+                if obj.get('bboxes'):
+                    items.append(obj)
+                    for b in obj['bboxes']:
+                        if 'label' in b: labels.add(b['label'])
+            except Exception:
+                continue
+    categories = [{'id': i+1, 'name': c} for i, c in enumerate(sorted(labels))]
+    cat_to_id = { c['name']: c['id'] for c in categories }
+    images = []
+    anns = []
+    img_id = 1
+    ann_id = 1
+    for it in items:
+        ipath = os.path.join(base, it['path'])
+        w = h = None
+        if Image is not None and os.path.exists(ipath):
+            try:
+                with Image.open(ipath) as im:
+                    w, h = im.size
+            except Exception:
+                pass
+        if not w or not h:
+            w = (it.get('image_size') or {}).get('w')
+            h = (it.get('image_size') or {}).get('h')
+        if not w or not h:
+            continue
+        images.append({'id': img_id, 'file_name': it['path'], 'width': w, 'height': h})
+        for b in it.get('bboxes') or []:
+            anns.append({
+                'id': ann_id,
+                'image_id': img_id,
+                'category_id': cat_to_id.get(b.get('label'), 1),
+                'bbox': [float(b['x']), float(b['y']), float(b['w']), float(b['h'])],
+                'area': float(b['w']) * float(b['h']),
+                'iscrowd': 0,
+            })
+            ann_id += 1
+        img_id += 1
+    coco = {'images': images, 'annotations': anns, 'categories': categories}
+    return jsonify(coco)
+
+
+@app.route('/api/datasets/<name>/annotations/queue', methods=['GET'])
+def dataset_annotations_queue(name):
+    name = _safe_name(name)
+    version = _safe_name(request.args.get('version') or '')
+    strategy = (request.args.get('strategy') or 'missing').lower()
+    limit = int(request.args.get('limit') or 50)
+    base = _dataset_version_dir(name, version if version else None)
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Not found'}), 404
+    annotated = set()
+    ann_path = os.path.join(base, 'annotations.jsonl')
+    if os.path.exists(ann_path):
+        try:
+            for ln in open(ann_path, 'r', encoding='utf-8'):
+                try:
+                    it = json.loads(ln)
+                    if it.get('path'):
+                        annotated.add(it['path'])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+    all_paths = []
+    for r, _, fns in os.walk(base):
+        for fn in fns:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in image_exts:
+                rel = os.path.relpath(os.path.join(r, fn), base).replace('\\', '/')
+                all_paths.append(rel)
+    cand = [p for p in all_paths if p not in annotated]
+    if strategy == 'random':
+        random.shuffle(cand)
+    out = cand[:limit]
+    return jsonify({'items': out, 'total_unlabeled': len(cand)})
+
+
+@app.route('/api/datasets/<name>/annotations/prelabel', methods=['POST'])
+def dataset_annotations_prelabel(name):
+    data = request.json or {}
+    version = _safe_name(data.get('version') or '')
+    provider = (data.get('provider') or 'stub').lower()
+    task = (data.get('task') or 'bbox').lower()
+    tasks_path = os.path.join(JOBS_DIR, 'curation_tasks.jsonl')
+    rec = {
+        'id': str(uuid.uuid4()),
+        'dataset': _safe_name(name),
+        'version': version,
+        'provider': provider,
+        'task': task,
+        'created': datetime.now().isoformat(),
+        'status': 'accepted',
+    }
+    try:
+        with open(tasks_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec) + '\n')
+    except Exception:
+        pass
+    return jsonify({'status': 'accepted', 'provider': provider, 'note': 'Prelabeling hook queued (stub).'}), 202
 
 
 @app.route('/api/datasets/sync', methods=['POST'])
@@ -1453,6 +2737,41 @@ def datasets_sync():
         return jsonify({'status': 'error', 'provider': provider, 'direction': direction, 'rc': e.returncode, 'output': (e.output or b'').decode(errors='ignore')}), 500
 
 
+# ================= HPO studies persistence =================
+@app.route('/api/hpo/studies', methods=['GET'])
+def hpo_studies_list():
+    p = os.path.join(JOBS_DIR, 'hpo_studies.jsonl')
+    items = []
+    if os.path.exists(p):
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                for ln in f:
+                    try:
+                        items.append(json.loads(ln))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    return jsonify({'items': items[-100:]})
+
+
+@app.route('/api/hpo/studies/save', methods=['POST'])
+def hpo_studies_save():
+    data = request.json or {}
+    rec = {
+        'id': str(uuid.uuid4()),
+        'created': datetime.now().isoformat(),
+        'study': data,
+    }
+    p = os.path.join(JOBS_DIR, 'hpo_studies.jsonl')
+    try:
+        with open(p, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec) + '\n')
+        return jsonify({'status': 'ok', 'id': rec['id']})
+    except Exception as e:
+        return jsonify({'error': 'Failed to save', 'detail': str(e)}), 500
+
+
 def _sample_metrics_once():
     """Take one metrics sample and append to history."""
     try:
@@ -1493,11 +2812,134 @@ def _ensure_metrics_thread():
     t.start()
 
 
+def _ensure_scheduler_thread():
+    global _scheduler_started
+    if _scheduler_started:
+        return
+    _scheduler_started = True
+
+    def _run_sched():
+        while True:
+            try:
+                scheds = _load_json(SCHEDULES_PATH, [])
+                changed = False
+                now = time.time()
+                for s in scheds:
+                    last = float(s.get('last_run_ts') or 0)
+                    interval = int(s.get('interval_seconds') or 0)
+                    if interval > 0 and (now - last) >= interval:
+                        payload = s.get('payload') or {}
+                        try:
+                            with app.test_request_context(json=payload):
+                                create_job()
+                            s['last_run_ts'] = now
+                            changed = True
+                        except Exception:
+                            pass
+                if changed:
+                    _save_json(SCHEDULES_PATH, scheds)
+            except Exception:
+                pass
+            time.sleep(30)
+
+    t = threading.Thread(target=_run_sched, daemon=True)
+    t.start()
+
+
 @app.route('/api/system/info', methods=['GET'])
 def system_info():
     """Get DGX system information (single snapshot)."""
     _ensure_metrics_thread()
+    _ensure_scheduler_thread()
     return jsonify(_system_info_snapshot())
+
+
+@app.route('/api/system/io', methods=['GET'])
+def system_io():
+    """Basic I/O profiling from /proc/diskstats (aggregate reads/writes per second)."""
+    reads = writes = 0
+    try:
+        with open('/proc/diskstats', 'r') as f:
+            for ln in f:
+                parts = ln.split()
+                if len(parts) < 14:
+                    continue
+                # fields: https://www.kernel.org/doc/Documentation/ABI/testing/procfs-diskstats
+                # reads completed (3), sectors read (5); writes completed (7), sectors written (9)
+                try:
+                    reads += int(parts[5])
+                    writes += int(parts[9])
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    now = time.time()
+    rps = wps = 0.0
+    if _last_io_totals['reads'] is not None and _last_io_totals['ts'] is not None:
+        dt = max(1e-6, now - _last_io_totals['ts'])
+        rps = (reads - _last_io_totals['reads']) / dt
+        wps = (writes - _last_io_totals['writes']) / dt
+    _last_io_totals.update({'reads': reads, 'writes': writes, 'ts': now})
+    return jsonify({'reads_per_sec': rps, 'writes_per_sec': wps})
+
+
+# ---------------- Pipelines & Scheduling ----------------
+@app.route('/api/pipelines', methods=['GET','POST'])
+def pipelines_root():
+    if request.method == 'POST':
+        data = request.json or {}
+        pipes = _load_json(PIPELINES_PATH, [])
+        pid = data.get('id') or str(uuid.uuid4())
+        data['id'] = pid
+        data['created'] = datetime.now().isoformat()
+        pipes.append(data)
+        _save_json(PIPELINES_PATH, pipes)
+        return jsonify({'status': 'ok', 'id': pid}), 201
+    return jsonify({'items': _load_json(PIPELINES_PATH, [])})
+
+
+@app.route('/api/pipelines/<pid>/run', methods=['POST'])
+def pipelines_run(pid):
+    pipes = _load_json(PIPELINES_PATH, [])
+    pipe = next((p for p in pipes if p.get('id') == pid), None)
+    if not pipe:
+        return jsonify({'error': 'Pipeline not found'}), 404
+    nodes = pipe.get('nodes') or []
+    edges = pipe.get('edges') or []
+    # compute dependencies map
+    deps = { n.get('id'): [] for n in nodes }
+    for e in edges:
+        deps.setdefault(e.get('to'), []).append(e.get('from'))
+    id_map = {}
+    for n in nodes:
+        payload = (n.get('job') or {}).copy()
+        # map deps to created job ids after creation
+        depends_on_nodes = deps.get(n.get('id')) or []
+        dep_ids = [id_map[d] for d in depends_on_nodes if d in id_map]
+        if dep_ids:
+            payload['depends_on'] = dep_ids
+        try:
+            with app.test_request_context(json=payload):
+                resp, code = create_job()
+                if code == 201:
+                    job_obj = resp.get_json()
+                    id_map[n.get('id')] = job_obj.get('id')
+        except Exception:
+            continue
+    return jsonify({'status': 'ok', 'jobs': id_map})
+
+
+@app.route('/api/schedules', methods=['GET','POST'])
+def schedules_root():
+    if request.method == 'POST':
+        data = request.json or {}
+        scheds = _load_json(SCHEDULES_PATH, [])
+        data['id'] = data.get('id') or str(uuid.uuid4())
+        data['created'] = datetime.now().isoformat()
+        scheds.append(data)
+        _save_json(SCHEDULES_PATH, scheds)
+        return jsonify({'status': 'ok', 'id': data['id']}), 201
+    return jsonify({'items': _load_json(SCHEDULES_PATH, [])})
 
 
 def _detect_partitions() -> Dict[str, Any]:
@@ -1628,6 +3070,136 @@ def gpu_partition_config():
     })
 
 
+_MIG_PROFILE_MEM_GB = {
+    '1g.5gb': 5,
+    '2g.10gb': 10,
+    '3g.20gb': 20,
+    '4g.20gb': 20,
+    '7g.40gb': 40,
+    '1g.10gb': 10,
+    '2g.20gb': 20,
+    '3g.40gb': 40,
+    '7g.80gb': 80,
+}
+
+
+@app.route('/api/gpu/partition/presets', methods=['GET'])
+def gpu_partition_presets():
+    presets = {
+        '4x_small_jobs': {'label': '4x Small Jobs', 'config': {'1g.5gb': 4}},
+        '2x_medium_infer': {'label': '2x Medium + Inference', 'config': {'3g.20gb': 2}},
+        '1x_large_training': {'label': '1x Large Training', 'config': {'7g.40gb': 1}},
+        'mixed_workload': {'label': 'Mixed Workload', 'config': {'3g.20gb': 1, '1g.5gb': 2}},
+    }
+    return jsonify({'presets': presets})
+
+
+def _estimate_model_size_params(model_dir: str) -> Dict[str, Any]:
+    # Best-effort estimation from config.json
+    cfg_path = os.path.join(model_dir, 'config.json')
+    params = None
+    hidden_size = num_layers = vocab = None
+    if os.path.exists(cfg_path):
+        try:
+            cfg = json.load(open(cfg_path))
+            params = cfg.get('n_parameters') or cfg.get('parameter_count')
+            hidden_size = cfg.get('hidden_size') or cfg.get('n_embd')
+            num_layers = cfg.get('num_hidden_layers') or cfg.get('n_layer')
+            vocab = cfg.get('vocab_size')
+        except Exception:
+            pass
+    if params is None and hidden_size and num_layers and vocab:
+        # crude transformer estimate: embeddings + MHA + MLP per layer
+        emb = hidden_size * vocab
+        per_layer = 12 * (hidden_size ** 2)  # very rough
+        params = emb + per_layer * num_layers
+    return {
+        'parameters': int(params) if isinstance(params, (int, float)) else None,
+        'hidden_size': hidden_size,
+        'num_layers': num_layers,
+        'vocab_size': vocab,
+    }
+
+
+def _estimate_memory_requirements(params: int | None, batch_size: int, seq_len: int, training: bool, precision: str = 'fp16') -> Dict[str, Any]:
+    # simple heuristics
+    bytes_per_param = 2 if precision in ('fp16', 'bf16') else 4
+    model_mem = (params or 0) * bytes_per_param
+    # optimizer states ~ 2-3x model params during training
+    opt_mem = model_mem * (2.0 if training else 0.0)
+    # activations ~ batch * seq * hidden_size * bytes (unknown hidden, approximate from params)
+    act_mem = 0.0
+    if params:
+        # assume hidden_size ~ sqrt(params / (12 * layers)) -> fallback scale
+        act_scale = 0.0005  # heuristic factor
+        act_mem = batch_size * seq_len * bytes_per_param * act_scale * params
+    total = model_mem + opt_mem + act_mem
+    return {
+        'model_bytes': int(model_mem),
+        'optimizer_bytes': int(opt_mem),
+        'activation_bytes': int(act_mem),
+        'total_bytes': int(total),
+    }
+
+
+@app.route('/api/models/<model_id>/resource/estimate', methods=['GET'])
+def model_resource_estimate(model_id):
+    base = _model_dir(model_id)
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Model not found'}), 404
+    batch_size = int(request.args.get('batch_size') or 8)
+    seq_len = int(request.args.get('seq_len') or 2048)
+    training = (request.args.get('training') or '0') in ('1','true','yes')
+    precision = request.args.get('precision') or 'fp16'
+    est = _estimate_model_size_params(base)
+    mem = _estimate_memory_requirements(est.get('parameters'), batch_size, seq_len, training, precision)
+    return jsonify({'model': model_id, 'estimate': est, 'memory': mem})
+
+
+@app.route('/api/gpu/partition/recommend', methods=['POST'])
+def gpu_partition_recommend():
+    """Recommend a MIG partition layout based on model size/use-case.
+
+    JSON: { model_id?: string, params?: int, batch_size?: int, seq_len?: int, training?: bool }
+    """
+    data = request.json or {}
+    params = data.get('params')
+    if not params and data.get('model_id'):
+        est = _estimate_model_size_params(_model_dir(_safe_name(data['model_id'])))
+        params = est.get('parameters')
+    batch_size = int(data.get('batch_size') or 8)
+    seq_len = int(data.get('seq_len') or 2048)
+    training = bool(data.get('training') or False)
+    mem = _estimate_memory_requirements(params, batch_size, seq_len, training)
+    need_gb = max(1, int(mem['total_bytes'] / (1024**3)))
+    # Pick profiles with >= need_gb, limited by 4 instances.
+    candidates = sorted(_MIG_PROFILE_MEM_GB.items(), key=lambda x: x[1])
+    cfg: Dict[str, int] = {}
+    for prof, gb in candidates:
+        if gb >= need_gb:
+            cfg[prof] = 1
+            break
+    if not cfg:
+        # too large: suggest full GPU (no MIG)
+        return jsonify({'config': {}, 'full_gpu': True, 'rationale': f'model needs ~{need_gb} GB; consider full GPU allocation'}), 200
+    # Try to fill remaining capacity with smaller profiles if asked for parallelism
+    parallel = int(data.get('parallel') or 1)
+    total = sum(cfg.values())
+    if parallel > 1:
+        small = '1g.5gb'
+        add = min(4-total, max(0, parallel-1))
+        if add > 0:
+            cfg[small] = cfg.get(small, 0) + add
+    # Cap to 4
+    while sum(cfg.values()) > 4:
+        # remove smallest
+        smallest = sorted(cfg.items(), key=lambda x: _MIG_PROFILE_MEM_GB.get(x[0], 0))[0][0]
+        cfg[smallest] -= 1
+        if cfg[smallest] <= 0:
+            del cfg[smallest]
+    return jsonify({'config': cfg, 'need_gb': need_gb, 'rationale': 'Heuristic based on parameter count and batch/seq settings'})
+
+
 @app.route('/api/gpu/partition/apply', methods=['POST'])
 def gpu_partition_apply():
     """Apply a MIG partitioning configuration. Requires ENABLE_MIG_ADMIN=1.
@@ -1646,6 +3218,13 @@ def gpu_partition_apply():
     gpu_index = data.get('gpu_index')
     enable = bool(data.get('enable_mig', True))
     config = data.get('config') or {}
+    # Enforce max 4 instances per GPU
+    try:
+        total_instances = sum(int(v or 0) for v in (config or {}).values())
+    except Exception:
+        return jsonify({'error': 'Invalid config: counts must be integers >= 0'}), 400
+    if total_instances > 4:
+        return jsonify({'error': 'Too many partitions requested', 'detail': 'Maximum 4 MIG instances per GPU are allowed', 'requested_total': total_instances, 'limit': 4}), 400
     # Support dry-run by default; execute only if MIG_APPLY_EXECUTE=1
     if os.environ.get('MIG_APPLY_EXECUTE') != '1':
         return jsonify({
@@ -1655,7 +3234,8 @@ def gpu_partition_apply():
                 'gpu_index': gpu_index,
                 'enable_mig': enable,
                 'config': config
-            }
+            },
+            'constraints': {'max_instances_per_gpu': 4, 'requested_total': total_instances}
         }), 202
 
     # Real execution (best-effort, requires privileges)
@@ -1691,6 +3271,7 @@ def gpu_partition_apply():
         except Exception:
             pass
 
+        created_total = 0
         for prof, count in (config or {}).items():
             try:
                 c = int(count)
@@ -1703,9 +3284,13 @@ def gpu_partition_apply():
                 steps.append({'cmd': f'# skip: unknown profile {prof}', 'rc': -1, 'out': ''})
                 continue
             for _ in range(c):
+                if created_total >= 4:
+                    steps.append({'cmd': f'# cap reached (4 instances); skipping extra {prof}', 'rc': 0, 'out': ''})
+                    break
                 rc, out = run(['nvidia-smi', 'mig', '-cgi', str(gip_id), '-i', str(gpu_index), '-C'])
                 created.append({'profile': prof, 'gip_id': gip_id, 'rc': rc, 'out': out})
                 steps.append({'cmd': f'nvidia-smi mig -cgi {gip_id} -i {gpu_index} -C', 'rc': rc, 'out': out})
+                created_total += 1
 
         # Attempt compute instance creation for any GPU instance lacking CI
         # List GPU instances to retrieve GI IDs
@@ -1970,6 +3555,205 @@ def metrics_history_csv():
                 lines.append(f"{ts},{'' if gi is None else gi},{'' if up is None else up},{'' if mp is None else mp},{'' if sysm is None else sysm}")
     data = '\n'.join(lines)
     return Response(data, headers={'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename=metrics_history.csv'})
+
+
+@app.route('/api/hpo/<job_id>', methods=['GET'])
+def hpo_results(job_id):
+    base = os.path.join(MODELS_DIR, job_id)
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Job not found'}), 404
+    out = {'results': None, 'trials': []}
+    try:
+        p = os.path.join(base, 'hpo_results.json')
+        if os.path.exists(p):
+            out['results'] = json.load(open(p))
+    except Exception:
+        out['results'] = None
+    try:
+        p = os.path.join(base, 'hpo_trials.json')
+        if os.path.exists(p):
+            t = json.load(open(p))
+            out['trials'] = t.get('trials') or []
+    except Exception:
+        pass
+    return jsonify(out)
+
+@app.route('/api/export/zip', methods=['POST'])
+def export_zip():
+    """Create a ZIP archive from posted files and return it.
+
+    Request JSON format:
+      { "files": [ {"path": "path/in/zip.txt", "content": "..."}, ... ], "name": "archive.zip" }
+    """
+    try:
+        payload = request.json or {}
+        files = payload.get('files') or []
+        if not isinstance(files, list) or not files:
+            return jsonify({'error': 'No files provided'}), 400
+        name = payload.get('name') or 'export.zip'
+        mem = io.BytesIO()
+        with zipfile.ZipFile(mem, 'w', zipfile.ZIP_DEFLATED) as z:
+            for f in files:
+                try:
+                    p = (f.get('path') or '').strip()
+                    c = f.get('content')
+                    if not p:
+                        continue
+                    # sanitize path: keep relative, no parent traversals
+                    p = os.path.normpath(p).replace('\\', '/')
+                    if p.startswith('../') or p.startswith('/'):
+                        p = p.lstrip('./')
+                    if isinstance(c, str):
+                        data = c.encode('utf-8')
+                    elif isinstance(c, bytes):
+                        data = c
+                    else:
+                        data = json.dumps(c, indent=2).encode('utf-8')
+                    z.writestr(p, data)
+                except Exception:
+                    continue
+        mem.seek(0)
+        return send_file(mem, mimetype='application/zip', as_attachment=True, download_name=name)
+    except Exception as e:
+        return jsonify({'error': 'Failed to build zip', 'detail': str(e)}), 500
+
+
+@app.route('/api/curation/ollama/run', methods=['POST'])
+def ollama_curation():
+    """Stub endpoint for Ollama-based curation tasks.
+
+    JSON: { model: 'llama3', prompt: '...', input: {...}, task: 'label|score|dedupe', max_tokens: 256 }
+    """
+    data = request.json or {}
+    host = os.environ.get('OLLAMA_HOST')
+    if not host:
+        return jsonify({'status': 'skipped', 'message': 'OLLAMA_HOST not configured; install and set OLLAMA_HOST to enable'}), 200
+    return jsonify({'status': 'accepted', 'note': 'Ollama integration not fully implemented in this build'}), 202
+
+
+@app.route('/api/curation/openai/run', methods=['POST'])
+def openai_curation():
+    """Stub endpoint for OpenAI-based curation tasks.
+
+    JSON: { model: 'gpt-4o-mini', messages: [...], task: 'synth|augment|assess|bias' }
+    """
+    if not os.environ.get('OPENAI_API_KEY'):
+        return jsonify({'status': 'skipped', 'message': 'OPENAI_API_KEY not configured'}), 200
+    return jsonify({'status': 'accepted', 'note': 'OpenAI integration not fully implemented in this build'}), 202
+
+
+# ================= Storage Management =================
+def _dir_usage_bytes(path: str, limit_files: int | None = None):
+    total = 0
+    largest = []  # list of (size, rel)
+    start = path
+    for r, _, fns in os.walk(path):
+        for fn in fns:
+            fp = os.path.join(r, fn)
+            try:
+                sz = os.path.getsize(fp)
+            except Exception:
+                continue
+            total += sz
+            rel = os.path.relpath(fp, start)
+            largest.append((sz, rel))
+    largest.sort(reverse=True)
+    if limit_files is not None:
+        largest = largest[:limit_files]
+    return total, [{'file': rel, 'size_bytes': sz} for sz, rel in largest]
+
+
+@app.route('/api/storage/usage', methods=['GET'])
+def storage_usage():
+    dirs = {
+        'models': MODELS_DIR,
+        'datasets': DATASETS_DIR,
+        'logs': LOGS_DIR,
+        'jobs': JOBS_DIR,
+    }
+    out = {}
+    for k, p in dirs.items():
+        try:
+            total, largest = _dir_usage_bytes(p, limit_files=20)
+            out[k] = {'path': p, 'total_bytes': total, 'largest_files': largest}
+        except Exception:
+            out[k] = {'path': p, 'total_bytes': 0, 'largest_files': []}
+    # Persist a trend point
+    trend_path = os.path.join(BASE_DIR, 'storage_stats.jsonl')
+    rec = {'ts': datetime.now().isoformat(), 'totals': {k: v['total_bytes'] for k,v in out.items()}}
+    try:
+        with open(trend_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec) + '\n')
+    except Exception:
+        pass
+    # Cleanup suggestions
+    suggestions = []
+    try:
+        # Large logs
+        for it in out.get('logs', {}).get('largest_files', [])[:5]:
+            if it['size_bytes'] > 50*1024*1024:
+                suggestions.append({'action': 'compress', 'target': os.path.join(LOGS_DIR, it['file']), 'reason': 'Large log file'})
+        # Datasets: suggest deleting quarantine
+        for root, dirs, _ in os.walk(DATASETS_DIR):
+            if '_quarantine' in dirs:
+                suggestions.append({'action': 'review_quarantine', 'target': os.path.join(root, '_quarantine')})
+    except Exception:
+        pass
+    return jsonify({'usage': out, 'suggestions': suggestions})
+
+
+@app.route('/api/storage/trends', methods=['GET'])
+def storage_trends():
+    path = os.path.join(BASE_DIR, 'storage_stats.jsonl')
+    items = []
+    if os.path.exists(path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                for ln in f:
+                    try: items.append(json.loads(ln))
+                    except: pass
+        except Exception:
+            pass
+    return jsonify({'items': items[-200:]})
+
+
+@app.route('/api/storage/checkpoints/cleanup', methods=['POST'])
+def storage_checkpoints_cleanup():
+    data = request.json or {}
+    keep = int(data.get('keep') or 3)
+    model_id = data.get('model_id')
+    targets = []
+    if model_id:
+        targets = [os.path.join(MODELS_DIR, _safe_name(model_id))]
+    else:
+        # all models
+        targets = [os.path.join(MODELS_DIR, d) for d in os.listdir(MODELS_DIR) if os.path.isdir(os.path.join(MODELS_DIR, d))]
+    cleaned = []
+    for t in targets:
+        try:
+            files = []
+            for fn in os.listdir(t):
+                if fn.endswith('.pth') or fn.startswith('checkpoint-'):
+                    fp = os.path.join(t, fn)
+                    try:
+                        st = os.stat(fp)
+                        files.append((st.st_mtime, fp))
+                    except Exception:
+                        pass
+            files.sort(reverse=True)
+            for _, fp in files[keep:]:
+                # compress then remove
+                z = fp + '.zip'
+                try:
+                    with zipfile.ZipFile(z, 'w', zipfile.ZIP_DEFLATED) as zz:
+                        zz.write(fp, arcname=os.path.basename(fp))
+                    os.remove(fp)
+                    cleaned.append({'path': fp, 'archived': z})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return jsonify({'status': 'ok', 'cleaned': cleaned})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

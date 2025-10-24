@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import JobWizard from './components/JobWizard';
+import ArchitectureBuilder from './components/ArchitectureBuilder';
+import HPOViewer from './components/HPOViewer';
 import CommandPalette from './components/CommandPalette';
 import QuickStart from './components/QuickStart';
 import { Activity, Cpu, Database, Plus, List, Settings, Sun, Moon, Monitor, LayoutDashboard, BarChart3, ChevronLeft, ChevronRight, User, Search } from 'lucide-react';
 import { ToastProvider, Button, Input, Modal, useToast, PageTransition } from './components/ui';
 import { ModelsPage, ModelDetail, ModelCompare } from './components/Models';
 import { DatasetsPage } from './components/Datasets';
+import ExperimentsPage from './components/Experiments';
+import PipelinesPage from './components/Pipelines';
+import Labeling from './components/Labeling';
 
 // API Service
 // Use Vite env var if provided (e.g., VITE_API_URL=http://backend:5000), otherwise rely on relative '/api'.
@@ -53,6 +58,48 @@ api.uploadDataset = async (name, file, version) => {
   return res.json();
 };
 api.syncDatasets = (payload) => fetch(`${API_BASE}/datasets/sync`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r => r.json());
+api.updateDatasetMetadata = (name, payload) => fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/metadata`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }).then(r => r.json());
+api.getDatasetSamples = (name, params) => {
+  const qs = new URLSearchParams(Object.entries(params||{})).toString();
+  return fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/samples${qs?`?${qs}`:''}`).then(r=>r.json());
+};
+// Large-file streaming ingestion
+api.ingestStreamStart = (payload) => fetch(`${API_BASE}/datasets/ingest/stream_start`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+api.ingestStreamChunk = async (formData) => {
+  const res = await fetch(`${API_BASE}/datasets/ingest/stream_chunk`, { method:'POST', body: formData });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+};
+api.ingestStreamFinalize = (payload) => fetch(`${API_BASE}/datasets/ingest/stream_finalize`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+// Annotations export/queue/prelabel
+api.exportYolo = (name, params) => {
+  const qs = new URLSearchParams(Object.entries(params||{})).toString();
+  return fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/annotations/export/yolo${qs?`?${qs}`:''}`);
+};
+api.exportCoco = (name, params) => {
+  const qs = new URLSearchParams(Object.entries(params||{})).toString();
+  return fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/annotations/export/coco${qs?`?${qs}`:''}`).then(r=>r.json());
+};
+api.queueAnnotations = (name, params) => {
+  const qs = new URLSearchParams(Object.entries(params||{})).toString();
+  return fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/annotations/queue${qs?`?${qs}`:''}`).then(r=>r.json());
+};
+api.prelabel = (name, payload) => fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/annotations/prelabel`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+api.applyQuality = (name, payload) => fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/quality/apply`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+// HPO studies persistence
+api.listHpoStudies = () => fetch(`${API_BASE}/hpo/studies`).then(r=>r.json());
+api.saveHpoStudy = (study) => fetch(`${API_BASE}/hpo/studies/save`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(study)}).then(r=>r.json());
+api.createDatasetTemplate = (payload) => fetch(`${API_BASE}/datasets/template`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+api.createDatasetVersion = (name, payload) => fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/version/create`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+api.diffDatasetVersions = (name, payload) => fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/version/diff`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+api.rollbackDatasetVersion = (name, payload) => fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/version/rollback`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+api.ingestPreview = (payload) => fetch(`${API_BASE}/datasets/ingest/preview`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+api.ingestApply = (payload) => fetch(`${API_BASE}/datasets/ingest/apply`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
+api.getAnnotations = (name, params) => {
+  const qs = new URLSearchParams(Object.entries(params||{})).toString();
+  return fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/annotations${qs?`?${qs}`:''}`).then(r=>r.json());
+};
+api.saveAnnotations = (name, payload) => fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/annotations/save`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r=>r.json());
 // Adapters API
 api.listModelAdapters = (id) => fetch(`${API_BASE}/models/${id}/adapters`).then(r => r.json());
 api.mergeModelAdapter = (id, name) => fetch(`${API_BASE}/models/${id}/adapters/merge`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name })}).then(async r => { const t = await r.text(); try { return JSON.parse(t) } catch { return { error: t } } });
@@ -678,7 +725,7 @@ const CreateJob = ({ onNavigate, frameworks, partitions }) => {
 };
 
 // Jobs List Component
-const JobsList = ({ onNavigate, partitions }) => {
+const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
   const [jobs, setJobs] = useState([]);
   const [selectedJob, setSelectedJob] = useState(null);
   const toast = useToast();
@@ -689,6 +736,8 @@ const JobsList = ({ onNavigate, partitions }) => {
   const [frameworkFilter, setFrameworkFilter] = useState('');
   const [userFilter, setUserFilter] = useState('');
   const [groupByProject, setGroupByProject] = useState(false);
+  const [experimentFilter, setExperimentFilter] = useState('');
+  const [groupByExperiment, setGroupByExperiment] = useState(false);
   
   useEffect(() => {
     loadJobs();
@@ -764,7 +813,7 @@ const JobsList = ({ onNavigate, partitions }) => {
           </button>
         </div>
       </div>
-      <div className="bg-surface rounded-lg border border-border p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
+      <div className="bg-surface rounded-lg border border-border p-4 grid grid-cols-1 md:grid-cols-7 gap-3">
         <input className="border rounded px-3 py-2" placeholder="Search jobs" value={q} onChange={e=>setQ(e.target.value)} />
         <select className="border rounded px-3 py-2" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
           <option value="">All Statuses</option>
@@ -775,8 +824,11 @@ const JobsList = ({ onNavigate, partitions }) => {
           {['pytorch','huggingface','tensorflow'].map(f => <option key={f} value={f}>{f}</option>)}
         </select>
         <input className="border rounded px-3 py-2" placeholder="Filter by user" value={userFilter} onChange={e=>setUserFilter(e.target.value)} />
-        <label className="text-sm text-gray-700 flex items-center gap-2"><input type="checkbox" checked={groupByProject} onChange={e=>setGroupByProject(e.target.checked)} /> Group by project</label>
-        <div className="text-sm text-text/70 flex items-center">Tip: set config.project to group jobs</div>
+        <input className="border rounded px-3 py-2" placeholder="Filter by experiment" value={experimentFilter} onChange={e=>setExperimentFilter(e.target.value)} />
+        <div className="flex items-center gap-4 text-sm text-gray-700">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={groupByProject} onChange={e=>setGroupByProject(e.target.checked)} /> Group by project</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={groupByExperiment} onChange={e=>setGroupByExperiment(e.target.checked)} /> Group by experiment</label>
+        </div>
       </div>
 
       <div className="bg-surface rounded-lg shadow-md border border-border overflow-hidden">
@@ -788,6 +840,7 @@ const JobsList = ({ onNavigate, partitions }) => {
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Framework</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">GPU</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Experiment</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Created</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Actions</th>
             </tr>
@@ -798,9 +851,10 @@ const JobsList = ({ onNavigate, partitions }) => {
                 (!q || j.name.toLowerCase().includes(q.toLowerCase())) &&
                 (!statusFilter || j.status===statusFilter) &&
                 (!frameworkFilter || j.framework===frameworkFilter) &&
-                (!userFilter || ((j.config && j.config.user && String(j.config.user).toLowerCase().includes(userFilter.toLowerCase())) || (j.user && String(j.user).toLowerCase().includes(userFilter.toLowerCase()))))
+                (!userFilter || ((j.config && j.config.user && String(j.config.user).toLowerCase().includes(userFilter.toLowerCase())) || (j.user && String(j.user).toLowerCase().includes(userFilter.toLowerCase())))) &&
+                (!experimentFilter || ((j.experiment && j.experiment.name && String(j.experiment.name).toLowerCase().includes(experimentFilter.toLowerCase()))))
               );
-              if (!groupByProject) {
+              if (!groupByProject && !groupByExperiment) {
                 return filtered.map((job) => (
                    <tr key={job.id} className="hover:bg-muted">
                   <td className="px-6 py-4 text-sm font-medium">{job.name}</td>
@@ -832,17 +886,24 @@ const JobsList = ({ onNavigate, partitions }) => {
                       {job.status}
                     </span>
                   </td>
+                  <td className="px-6 py-4 text-sm text-text/80">{job.experiment?.name ? (<span className="px-2 py-0.5 border rounded text-xs">{job.experiment.name}</span>) : '-'}</td>
                   <td className="px-6 py-4 text-sm text-text/80">
                     <div>{new Date(job.created).toLocaleString()}</div>
                     {job.progress!=null && <div className="text-xs text-text/70">{Math.round(job.progress)}%{job.eta_seconds!=null && ` • ETA ${Math.ceil(job.eta_seconds/60)}m`}</div>}
                   </td>
-                  <td className="px-6 py-4 text-sm">
-                    <button
-                      onClick={() => setSelectedJob(job)}
-                      className="text-blue-600 hover:text-blue-800 mr-3"
-                    >
-                      View
-                    </button>
+                      <td className="px-6 py-4 text-sm">
+                        <button
+                          onClick={() => setSelectedJob(job)}
+                          className="text-blue-600 hover:text-blue-800 mr-3"
+                        >
+                          View
+                        </button>
+                        {job.framework==='huggingface' && job.config && job.config.hpo && job.config.hpo.enabled && (
+                          <button onClick={()=> onOpenHpo && onOpenHpo(job.id)} className="text-purple-600 hover:text-purple-800 mr-3">HPO</button>
+                        )}
+                    {job.framework==='huggingface' && job.config && job.config.hpo && job.config.hpo.enabled && (
+                      <button onClick={()=> onOpenHpo && onOpenHpo(job.id)} className="text-purple-600 hover:text-purple-800 mr-3">HPO</button>
+                    )}
                     {job.status === 'running' && (
                       <>
                         <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/pause`,{method:'POST'}); loadJobs(); toast.push({type:'info', title:'Job paused'});}} className="text-warning hover:brightness-110 mr-3">Pause</button>
@@ -859,7 +920,7 @@ const JobsList = ({ onNavigate, partitions }) => {
               // Group by project (config.project)
               const groups = {};
               filtered.forEach(j => {
-                const key = (j.config && j.config.project) ? String(j.config.project) : 'No project';
+                const key = groupByExperiment ? (j.experiment && j.experiment.name ? `Experiment: ${j.experiment.name}` : 'No experiment') : ((j.config && j.config.project) ? String(j.config.project) : 'No project');
                 (groups[key] ||= []).push(j);
               });
               const keys = Object.keys(groups).sort();
@@ -901,6 +962,7 @@ const JobsList = ({ onNavigate, partitions }) => {
                           {job.status}
                         </span>
                       </td>
+                      <td className="px-6 py-4 text-sm text-text/80">{job.experiment?.name ? (<span className="px-2 py-0.5 border rounded text-xs">{job.experiment.name}</span>) : '-'}</td>
                       <td className="px-6 py-4 text-sm text-text/80">
                         <div>{new Date(job.created).toLocaleString()}</div>
                     {job.progress!=null && <div className="text-xs text-text/70">{Math.round(job.progress)}%{job.eta_seconds!=null && ` • ETA ${Math.ceil(job.eta_seconds/60)}m`}</div>}
@@ -1045,6 +1107,7 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickStartOpen, setQuickStartOpen] = useState(false);
   const [jobs, setJobs] = useState([]);
+  const [hpoJobId, setHpoJobId] = useState(null);
   const [gpuSeries, setGpuSeries] = useState({}); // { [gpuIndex]: number[] }
   const [netSeries, setNetSeries] = useState({ rx: [], tx: [] });
   const userId = 'anonymous';
@@ -1190,7 +1253,22 @@ export default function App() {
         )}
         {currentPage === 'jobs' && (
           <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
-            <JobsList onNavigate={setCurrentPage} partitions={partitions} />
+            <JobsList onNavigate={setCurrentPage} partitions={partitions} onOpenHpo={(id)=>{ setHpoJobId(id); setCurrentPage('hpo'); }} />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'hpo' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <HPOViewer jobId={hpoJobId} apiBase={API_BASE} />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'labeling' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <Labeling api={api} />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'builder' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <ArchitectureBuilder />
           </PageWithSidebars>
         )}
         {currentPage === 'models' && !modelView.id && modelView.compareIds.length===0 && (
@@ -1246,6 +1324,16 @@ export default function App() {
         {currentPage === 'datasets' && (
           <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
             <DatasetsPage api={api} />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'experiments' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <ExperimentsPage />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'pipelines' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <PipelinesPage />
           </PageWithSidebars>
         )}
           </PageTransition>
@@ -1337,9 +1425,10 @@ function JobLiveLogs({ jobId }){
 
 function JobLiveMetrics({ jobId }){
   const [data, setData] = useState([]);
+  const [tracking, setTracking] = useState({});
   useEffect(()=>{
     const es = new EventSource(`${API_BASE}/jobs/${jobId}/metrics/stream`);
-    es.onmessage = (e)=>{ try{ const p = JSON.parse(e.data); setData(p.metrics||[]);}catch{}};
+    es.onmessage = (e)=>{ try{ const p = JSON.parse(e.data); const arr = p.metrics||[]; setData(arr); const t = arr.filter(m=>m.kind==='tracking'); if (t.length){ const last=t[t.length-1]; setTracking(prev=>({...prev, ...last})); } }catch{}};
     return ()=> es.close();
   }, [jobId]);
   const losses = data.filter(m => m.loss!=null || m.avg_loss!=null || m.avg_train_loss!=null);
@@ -1348,6 +1437,18 @@ function JobLiveMetrics({ jobId }){
   return (
     <div>
       <p className="text-sm text-text/70 mb-2">Metrics</p>
+      {/* Tracking links */}
+      {(() => {
+        const wb = tracking && tracking.wandb;
+        const mf = tracking && tracking.mlflow;
+        if (!wb && !mf) return null;
+        return (
+          <div className="mb-3 p-2 bg-muted rounded border border-border text-xs flex items-center gap-3">
+            {wb && wb.url && (<a className="text-primary underline" href={wb.url} target="_blank" rel="noreferrer">Open W&B Run</a>)}
+            {mf && mf.run_id && (<span>MLflow run: <code className="px-1 py-0.5 bg-surface border border-border rounded">{mf.run_id.slice(0,8)}…</code></span>)}
+          </div>
+        );
+      })()}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <MiniLine series={losses} y={(m)=> m.loss ?? m.avg_loss ?? m.avg_train_loss} label="Loss" />
         <MiniLine series={accs} y={(m)=> (m.accuracy ?? m.accuracy_pct ?? m.val_acc_pct)} label="Accuracy" />
@@ -1793,6 +1894,16 @@ function Sparkline({ data=[], color="#2563eb", width=240, height=32, formatter }
 
 // Secondary pages
 function HardwareStorage({ systemInfo }){
+  const [usage, setUsage] = React.useState(null);
+  const [io, setIo] = React.useState(null);
+  React.useEffect(()=>{ (async()=>{ try{ const res = await fetch(`${API_BASE}/storage/usage`); setUsage(await res.json()); }catch{} })(); }, []);
+  React.useEffect(()=>{
+    let t = null;
+    const poll = async () => { try { const r = await fetch(`${API_BASE}/system/io`); setIo(await r.json()); } catch {} t = setTimeout(poll, 3000); };
+    poll();
+    return ()=>{ if (t) clearTimeout(t); };
+  }, []);
+  const fmt = (b) => `${(b/1e9).toFixed(1)} GB`;
   return (
     <div className="space-y-4">
       <h1 className="text-3xl font-bold">Storage</h1>
@@ -1807,6 +1918,44 @@ function HardwareStorage({ systemInfo }){
           ))}
           {(!systemInfo.disks || systemInfo.disks.length === 0) && (<div className="text-xs text-text/60">No disk info</div>)}
         </div>
+      </div>
+      <div className="bg-surface p-6 rounded-lg border border-border">
+        <div className="text-sm font-semibold mb-2">I/O Profiling</div>
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div><div className="text-text/70">Reads/s</div><div className="font-semibold">{io ? Math.round(io.reads_per_sec) : '-'}</div></div>
+          <div><div className="text-text/70">Writes/s</div><div className="font-semibold">{io ? Math.round(io.writes_per_sec) : '-'}</div></div>
+        </div>
+      </div>
+      <div className="bg-surface p-6 rounded-lg border border-border">
+        <div className="text-sm font-semibold mb-2">Directories</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+          {usage && Object.entries(usage.usage||{}).map(([k,v]) => (
+            <div key={k} className="p-3 border border-border rounded">
+              <div className="text-text/70">{k}</div>
+              <div className="font-semibold">{fmt(v.total_bytes)}</div>
+              <div className="text-[11px] text-text/60 truncate" title={v.path}>{v.path}</div>
+            </div>
+          ))}
+        </div>
+        {usage && (
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <div className="text-sm font-semibold mb-1">Largest Files</div>
+              <div className="text-xs max-h-48 overflow-auto">
+                {Object.entries(usage.usage||{}).flatMap(([k,v]) => (v.largest_files||[]).slice(0,3).map(it => ({...it, scope:k}))).sort((a,b)=>b.size_bytes-a.size_bytes).slice(0,10).map((it,i)=>(
+                  <div key={i} className="flex justify-between gap-2"><span className="truncate">[{it.scope}] {it.file}</span><span className="text-text/70">{fmt(it.size_bytes)}</span></div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-semibold mb-1">Cleanup Recommendations</div>
+              <div className="text-xs">
+                {(usage.suggestions||[]).map((s,i)=>(<div key={i} className="flex justify-between gap-2"><span className="truncate">{s.action} — {s.target}</span><span className="text-text/70">{s.reason||''}</span></div>))}
+                {(usage.suggestions||[]).length===0 && <div className="text-text/60">No suggestions</div>}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1862,12 +2011,17 @@ function AdminPartitions() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
   const [form, setForm] = React.useState({});
+  const [sys, setSys] = React.useState(null);
+  const [presetSel, setPresetSel] = React.useState('');
+  const [modelForRec, setModelForRec] = React.useState('');
+  const [batchForRec, setBatchForRec] = React.useState(8);
 
   React.useEffect(() => {
     (async () => {
       try {
         const data = await api.getPartitionConfig();
         setCfg(data);
+        try { setSys(await api.getSystemInfo()); } catch {}
         setLoading(false);
       } catch (e) {
         setError(String(e));
@@ -1885,6 +2039,35 @@ function AdminPartitions() {
     } catch (e) {
       setError(String(e));
     }
+  };
+
+  const totalInstances = (gpuIndex) => {
+    const c = form[gpuIndex] || {};
+    return Object.values(c).reduce((a, v) => a + (parseInt(v)||0), 0);
+  };
+
+  const profileMem = (p) => ({
+    '1g.5gb': 5, '2g.10gb': 10, '3g.20gb': 20, '4g.20gb': 20, '7g.40gb': 40,
+    '1g.10gb': 10, '2g.20gb': 20, '3g.40gb': 40, '7g.80gb': 80,
+  }[p] || 0);
+
+  const applyPreset = (gpuIndex, key) => {
+    if (!key) return;
+    const map = {
+      small4: { '1g.5gb': 4 },
+      med2: { '3g.20gb': 2 },
+      large1: { '7g.40gb': 1 },
+      mixed: { '3g.20gb': 1, '1g.5gb': 2 },
+    };
+    setForm(prev => ({ ...prev, [gpuIndex]: map[key] }));
+  };
+
+  const recommend = async (gpuIndex) => {
+    try {
+      const res = await fetch(`${API_BASE}/gpu/partition/recommend`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model_id: modelForRec || undefined, batch_size: parseInt(batchForRec)||8, training: true })});
+      const out = await res.json();
+      if (out.config) setForm(prev => ({ ...prev, [gpuIndex]: out.config }));
+    } catch (e) { alert('Recommend failed'); }
   };
 
   if (loading) return <div>Loading...</div>;
@@ -1920,6 +2103,22 @@ function AdminPartitions() {
           </div>
           <div className="mt-4">
             <p className="text-sm font-semibold text-gray-700 mb-2">Configure (dry‑run)</p>
+            <div className="mb-2 flex items-center gap-2 text-xs">
+              <span>Total instances: {totalInstances(g.index)}/4</span>
+              {totalInstances(g.index) > 4 && <span className="text-red-600">Limit exceeded (max 4)</span>}
+            </div>
+            {/* Visual partition designer: memory bar */}
+            <div className="mb-3">
+              <div className="text-xs text-text/70 mb-1">GPU Memory</div>
+              <div className="w-full h-3 bg-muted rounded overflow-hidden border border-border">
+                {Object.entries(form[g.index]||{}).flatMap(([p,c]) => Array.from({length: parseInt(c)||0}).map((_,i)=>({p, i}))).map((it,idx)=>{
+                  const totalGiB = Math.max(1, Math.round(((sys?.gpus||[])[g.index]?.memory_total_mib||40000)/1024));
+                  const w = Math.min(100, (profileMem(it.p)/totalGiB)*100);
+                  const colors = ['#22c55e','#3b82f6','#f59e0b','#ef4444'];
+                  return <div key={idx} style={{ width: `${w}%`, height:'100%', background: colors[idx%colors.length], display:'inline-block' }} title={`${it.p}`} />;
+                })}
+              </div>
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {(cfg.supported_profiles || []).map((p) => (
                 <div key={p} className="flex items-center gap-2">
@@ -1928,10 +2127,32 @@ function AdminPartitions() {
                 </div>
               ))}
             </div>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+              <div>
+                <label className="text-sm">Presets</label>
+                <select className="w-full border border-border rounded px-3 py-2 bg-surface" value={presetSel} onChange={e=>{ setPresetSel(e.target.value); applyPreset(g.index, e.target.value); }}>
+                  <option value="">Choose…</option>
+                  <option value="small4">4x Small Jobs (4x 1g.5gb)</option>
+                  <option value="med2">2x Medium + Inference (2x 3g.20gb)</option>
+                  <option value="large1">1x Large Training (1x 7g.40gb)</option>
+                  <option value="mixed">Mixed Workload (1x 3g.20gb + 2x 1g.5gb)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-sm">Auto-size by Model</label>
+                <input className="w-full border border-border rounded px-3 py-2 bg-surface" placeholder="model id (local)" value={modelForRec} onChange={e=>setModelForRec(e.target.value)} />
+                <div className="text-[11px] text-text/60 mt-1">Optional: leave empty and we’ll assume params from job.</div>
+              </div>
+              <div className="flex items-end gap-2">
+                <label className="text-sm">Batch<input type="number" className="w-24 ml-2 border border-border rounded px-2 py-1 bg-surface" value={batchForRec} onChange={e=>setBatchForRec(parseInt(e.target.value)||8)} /></label>
+                <button onClick={()=>recommend(g.index)} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">Recommend</button>
+              </div>
+            </div>
             <div className="mt-3">
-              <button onClick={()=>handleSubmit(g.index)} className={`px-4 py-2 rounded ${cfg.admin_enabled ? 'bg-primary text-on-primary hover:brightness-110' : 'bg-muted text-text/60'}`} disabled={!cfg.admin_enabled}>
+              <button onClick={()=>handleSubmit(g.index)} className={`px-4 py-2 rounded ${cfg.admin_enabled ? 'bg-primary text-on-primary hover:brightness-110' : 'bg-muted text-text/60'}`} disabled={!cfg.admin_enabled || totalInstances(g.index) > 4}>
                 Apply Configuration
               </button>
+              {totalInstances(g.index) > 4 && <div className="text-xs text-red-600 mt-1">Cannot apply: total instances exceed maximum of 4 per GPU.</div>}
             </div>
           </div>
         </div>
@@ -1991,8 +2212,12 @@ function SecondaryNav({ currentPage, onNavigate }){
   const groups = [
     { name: 'Training', items: [
       { key: 'jobs', label: 'Jobs' },
+      { key: 'experiments', label: 'Experiments' },
+      { key: 'pipelines', label: 'Pipelines' },
       { key: 'models', label: 'Models' },
       { key: 'datasets', label: 'Datasets' },
+      { key: 'labeling', label: 'Labeling' },
+      { key: 'builder', label: 'Builder' },
     ]},
     { name: 'Hardware', items: [
       { key: 'hardware_gpus', label: 'GPUs' },
@@ -2027,8 +2252,12 @@ function Sidebar({ collapsed, setCollapsed, current, onNavigate }){
   const items = [
     { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
     { key: 'jobs', label: 'Jobs', icon: <Activity size={18} /> },
+    { key: 'experiments', label: 'Experiments', icon: <List size={18} /> },
+    { key: 'pipelines', label: 'Pipelines', icon: <List size={18} /> },
     { key: 'models', label: 'Models', icon: <BarChart3 size={18} /> },
     { key: 'datasets', label: 'Datasets', icon: <Database size={18} /> },
+    { key: 'labeling', label: 'Labeling', icon: <List size={18} /> },
+    { key: 'builder', label: 'Builder', icon: <Monitor size={18} /> },
     { key: 'wizard', label: 'Quick Start', icon: <List size={18} /> },
     { key: 'admin', label: 'Admin', icon: <Settings size={18} /> },
   ];
@@ -2088,12 +2317,22 @@ function Breadcrumbs({ currentPage, modelView, onNavigate }){
       if (modelView?.compareIds?.length) add('model-compare','Compare');
     } else if (currentPage === 'jobs') {
       add('jobs','Jobs');
+    } else if (currentPage === 'experiments') {
+      add('experiments','Experiments');
+    } else if (currentPage === 'pipelines') {
+      add('pipelines','Pipelines');
     } else if (currentPage === 'create') {
       add('jobs','Jobs'); add('create','New');
     } else if (currentPage === 'wizard') {
       add('wizard','Quick Start');
     } else if (currentPage === 'datasets') {
       add('datasets','Datasets');
+    } else if (currentPage === 'hpo') {
+      add('jobs','Jobs'); add('hpo','HPO');
+    } else if (currentPage === 'labeling') {
+      add('datasets','Datasets'); add('labeling','Labeling');
+    } else if (currentPage === 'builder') {
+      add('builder','Builder');
     } else if (currentPage === 'admin') {
       add('admin','Admin');
     } else if (currentPage === 'hardware_gpus') {
@@ -2110,7 +2349,7 @@ function Breadcrumbs({ currentPage, modelView, onNavigate }){
       add('settings','Settings'); add('settings_billing','Billing');
     }
   }
-  const pageKeys = new Set(['dashboard','jobs','models','datasets','admin','wizard','create']);
+  const pageKeys = new Set(['dashboard','jobs','experiments','pipelines','models','datasets','admin','wizard','create','builder','hpo','labeling']);
   return (
     <ol className="flex items-center gap-2">
       {items.map((it,i)=> (
