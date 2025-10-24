@@ -15,6 +15,9 @@ from transformers import (
 from datasets import Dataset
 import numpy as np
 
+# Resolve project base directory (two levels up from this script)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 def create_dummy_dataset(config):
     """Create dummy dataset for demonstration"""
     num_samples = config.get('num_samples', 1000)
@@ -84,7 +87,7 @@ def train_transformer(config, job_id):
     eval_dataset.set_format('torch', columns=['input_ids', 'attention_mask', 'label'])
     
     # Training arguments
-    output_dir = f'/home/claude/dgx-ai-trainer/models/{job_id}'
+    output_dir = os.path.join(BASE_DIR, 'models', job_id)
     
     training_args = TrainingArguments(
         output_dir=output_dir,
@@ -96,7 +99,7 @@ def train_transformer(config, job_id):
         num_train_epochs=config.get('epochs', 3),
         weight_decay=config.get('weight_decay', 0.01),
         warmup_steps=config.get('warmup_steps', 500),
-        logging_dir=f'/home/claude/dgx-ai-trainer/logs/{job_id}',
+        logging_dir=os.path.join(BASE_DIR, 'logs', job_id),
         logging_steps=10,
         save_total_limit=2,
         load_best_model_at_end=True,

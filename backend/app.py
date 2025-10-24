@@ -12,9 +12,21 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuration
-JOBS_DIR = '/home/claude/dgx-ai-trainer/jobs'
-MODELS_DIR = '/home/claude/dgx-ai-trainer/models'
-LOGS_DIR = '/home/claude/dgx-ai-trainer/logs'
+# Use project-relative paths by default, with environment variable overrides.
+BASE_DIR = os.environ.get(
+    'DGX_TRAINER_BASE_DIR',
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+def _resolve_dir(env_value: str | None, default_name: str) -> str:
+    if env_value:
+        return env_value if os.path.isabs(env_value) else os.path.abspath(os.path.join(BASE_DIR, env_value))
+    return os.path.join(BASE_DIR, default_name)
+
+JOBS_DIR = _resolve_dir(os.environ.get('JOBS_DIR'), 'jobs')
+MODELS_DIR = _resolve_dir(os.environ.get('MODELS_DIR'), 'models')
+LOGS_DIR = _resolve_dir(os.environ.get('LOGS_DIR'), 'logs')
+TRAINING_SCRIPTS_DIR = _resolve_dir(os.environ.get('TRAINING_SCRIPTS_DIR'), 'training_scripts')
 
 os.makedirs(JOBS_DIR, exist_ok=True)
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -167,7 +179,7 @@ def run_training_job(job_id):
         save_jobs()
         
         # Prepare training command
-        script_path = '/home/claude/dgx-ai-trainer/training_scripts'
+        script_path = TRAINING_SCRIPTS_DIR
         
         if job['type'] == 'train':
             script = os.path.join(script_path, f"train_{job['framework']}.py")
@@ -188,7 +200,7 @@ def run_training_job(job_id):
                 cmd,
                 stdout=f,
                 stderr=subprocess.STDOUT,
-                cwd='/home/claude/dgx-ai-trainer'
+                cwd=BASE_DIR
             )
             
             job['pid'] = process.pid

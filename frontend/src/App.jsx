@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { Camera, Activity, Cpu, Database, Plus, List, Settings } from 'lucide-react';
 
 // API Service
-const API_BASE = 'http://localhost:5000/api';
+// Use Vite env var if provided (e.g., VITE_API_URL=http://backend:5000), otherwise rely on relative '/api'.
+const API_BASE = (import.meta.env && import.meta.env.VITE_API_URL)
+  ? `${String(import.meta.env.VITE_API_URL).replace(/\/$/, '')}/api`
+  : '/api';
 
 const api = {
   getSystemInfo: () => fetch(`${API_BASE}/system/info`).then(r => r.json()),

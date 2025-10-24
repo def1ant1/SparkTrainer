@@ -41,6 +41,25 @@ dgx-ai-trainer/
 └── logs/                   # Training logs
 ```
 
+## Configuration
+
+- Backend paths are now project-relative by default. Override with env vars:
+  - `DGX_TRAINER_BASE_DIR` (defaults to repo root)
+  - `JOBS_DIR`, `MODELS_DIR`, `LOGS_DIR`, `TRAINING_SCRIPTS_DIR` (absolute or relative to base dir)
+- Frontend API base uses `VITE_API_URL` if provided, otherwise calls relative `/api` so reverse proxies (nginx) work out-of-the-box.
+
+Examples:
+
+```
+# Use custom data directories
+export JOBS_DIR=./data/jobs
+export MODELS_DIR=/mnt/models
+export LOGS_DIR=./run/logs
+
+# Point frontend at a remote API during development
+VITE_API_URL=http://localhost:5000 npm run dev
+```
+
 ## Installation
 
 ### Prerequisites
@@ -84,6 +103,26 @@ npm run dev
 ```
 
 The web interface will be available at `http://localhost:3000`
+
+### Docker Compose (nginx + containers)
+
+Run the full stack via Docker with nginx as a reverse proxy:
+
+```
+docker compose up --build
+```
+
+- Open http://localhost to access the UI (nginx proxies `/` to the frontend and `/api` to the backend).
+- GPU: Compose requests GPU access with `gpus: all`. Ensure NVIDIA Container Toolkit is installed and `docker info` shows `Runtimes: nvidia`.
+- Training scripts and data directories are mapped as volumes:
+  - `./training_scripts` → `/app/training_scripts`
+  - `./jobs` → `/app/jobs`
+  - `./models` → `/app/models`
+  - `./logs` → `/app/logs`
+
+Notes:
+- The frontend uses relative `/api` calls by default, so no extra configuration is needed for nginx.
+- The backend Docker image installs CUDA 12.1 PyTorch wheels and sets `DGX_TRAINER_BASE_DIR=/app` to align paths.
 
 ## Usage Guide
 

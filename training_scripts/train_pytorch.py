@@ -6,6 +6,9 @@ import argparse
 import json
 import os
 from datetime import datetime
+ 
+# Resolve project base directory (two levels up from this script)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 class CustomModel(nn.Module):
     """Flexible neural network architecture"""
@@ -190,7 +193,7 @@ def train_model(config, job_id):
         print(f"  Training Accuracy: {accuracy:.2f}%\n")
     
     # Save model
-    save_dir = f'/home/claude/dgx-ai-trainer/models/{job_id}'
+    save_dir = os.path.join(BASE_DIR, 'models', job_id)
     os.makedirs(save_dir, exist_ok=True)
     
     model_path = os.path.join(save_dir, 'model.pth')

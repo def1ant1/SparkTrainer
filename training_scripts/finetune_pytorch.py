@@ -8,6 +8,9 @@ import os
 from datetime import datetime
 import torchvision.models as models
 
+# Resolve project base directory (two levels up from this script)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 def load_pretrained_model(config):
     """Load a pre-trained model"""
     
@@ -201,7 +204,7 @@ def finetune_model(config, job_id):
         # Save best model
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            save_dir = f'/home/claude/dgx-ai-trainer/models/{job_id}'
+            save_dir = os.path.join(BASE_DIR, 'models', job_id)
             os.makedirs(save_dir, exist_ok=True)
             
             best_model_path = os.path.join(save_dir, 'best_model.pth')
@@ -215,7 +218,7 @@ def finetune_model(config, job_id):
             }, best_model_path)
     
     # Save final model
-    save_dir = f'/home/claude/dgx-ai-trainer/models/{job_id}'
+    save_dir = os.path.join(BASE_DIR, 'models', job_id)
     os.makedirs(save_dir, exist_ok=True)
     
     model_path = os.path.join(save_dir, 'model.pth')

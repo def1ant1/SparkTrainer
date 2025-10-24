@@ -16,13 +16,9 @@ services:
     environment:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - DGX_TRAINER_BASE_DIR=/app
+    # Enable GPU access with modern Compose
+    gpus: all
     restart: unless-stopped
 
   frontend:
@@ -34,8 +30,6 @@ services:
       - "3000:3000"
     depends_on:
       - backend
-    environment:
-      - VITE_API_URL=http://localhost:5000
     restart: unless-stopped
 
   nginx:
