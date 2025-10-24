@@ -144,6 +144,9 @@ def finetune_model(config, job_id):
     
     print(f"\nStarting fine-tuning for {num_epochs} epochs...")
     
+    total_steps = num_epochs * len(train_loader)
+    global_step = 0
+    start_time = datetime.now().isoformat()
     for epoch in range(num_epochs):
         # Training phase
         model.train()
@@ -168,6 +171,25 @@ def finetune_model(config, job_id):
             if batch_idx % 10 == 0:
                 print(f"Epoch [{epoch+1}/{num_epochs}] Batch [{batch_idx}/{len(train_loader)}] "
                       f"Loss: {loss.item():.4f}")
+                try:
+                    metric = {
+                        'kind': 'batch',
+                        'epoch': epoch + 1,
+                        'num_epochs': num_epochs,
+                        'batch_idx': batch_idx,
+                        'num_batches': len(train_loader),
+                        'loss': float(loss.item()),
+                        'accuracy': float(correct / total) if total else None,
+                        'lr': float(optimizer.param_groups[0].get('lr', learning_rate)) if hasattr(optimizer, 'param_groups') else None,
+                        'step': global_step,
+                        'total_steps': total_steps,
+                        'time': datetime.now().isoformat(),
+                        'start_time': start_time,
+                    }
+                    print('METRIC:' + json.dumps(metric), flush=True)
+                except Exception:
+                    pass
+            global_step += 1
         
         avg_train_loss = train_loss / len(train_loader)
         train_accuracy = 100. * correct / total
@@ -195,6 +217,23 @@ def finetune_model(config, job_id):
         print(f"\nEpoch {epoch+1}/{num_epochs} Complete:")
         print(f"  Train Loss: {avg_train_loss:.4f} | Train Acc: {train_accuracy:.2f}%")
         print(f"  Val Loss: {avg_val_loss:.4f} | Val Acc: {val_accuracy:.2f}%")
+        try:
+            epoch_metric = {
+                'kind': 'epoch',
+                'epoch': epoch + 1,
+                'num_epochs': num_epochs,
+                'avg_train_loss': float(avg_train_loss),
+                'val_loss': float(avg_val_loss),
+                'train_acc_pct': float(train_accuracy),
+                'val_acc_pct': float(val_accuracy),
+                'step': global_step,
+                'total_steps': total_steps,
+                'time': datetime.now().isoformat(),
+                'start_time': start_time,
+            }
+            print('METRIC:' + json.dumps(epoch_metric), flush=True)
+        except Exception:
+            pass
         
         # Update learning rate
         if use_scheduler:

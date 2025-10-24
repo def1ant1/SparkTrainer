@@ -5,6 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DGX AI Trainer</title>
+    <script>
+      (function(){
+        try{
+          var ls = localStorage.getItem('theme'); // 'light' | 'dark' | 'system'
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var theme = ls || 'system';
+          var doc = document.documentElement;
+          if (theme === 'dark' || (theme === 'system' && prefersDark)) {
+            doc.classList.add('dark');
+          } else {
+            doc.classList.remove('dark');
+          }
+          doc.setAttribute('data-theme', theme);
+        }catch(e){}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

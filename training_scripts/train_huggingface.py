@@ -10,7 +10,8 @@ from transformers import (
     Trainer,
     TrainingArguments,
     DataCollatorWithPadding,
-    get_linear_schedule_with_warmup
+    get_linear_schedule_with_warmup,
+    TrainerCallback
 )
 from datasets import Dataset
 import numpy as np
@@ -38,6 +39,16 @@ def train_transformer(config, job_id):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
+    # Optional experiment tracking (best-effort)
+    tracking = config.get('tracking', {}) if isinstance(config.get('tracking'), dict) else {}
+    wandb_run = None
+    try:
+        if tracking.get('wandb') or os.environ.get('WANDB_API_KEY'):
+            import wandb  # type: ignore
+            wandb_run = wandb.init(project=tracking.get('project', 'dgx-ai-trainer'), config=config, reinit=True)
+    except Exception:
+        wandb_run = None
+
     # Model configuration
     model_name = config.get('model_name', 'bert-base-uncased')
     task_type = config.get('task_type', 'classification')  # 'classification' or 'generation'
@@ -128,6 +139,33 @@ def train_transformer(config, job_id):
         data_collator=data_collator,
         compute_metrics=compute_metrics if task_type == 'classification' else None,
     )
+
+    class JsonLoggerCallback(TrainerCallback):
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            try:
+                payload = {
+                    'kind': 'log',
+                    'step': int(state.global_step),
+                    'epoch': float(state.epoch) if state.epoch is not None else None,
+                    'logs': logs or {},
+                    'time': datetime.now().isoformat(),
+                }
+                print('METRIC:' + json.dumps(payload), flush=True)
+            except Exception:
+                pass
+        def on_epoch_end(self, args, state, control, **kwargs):
+            try:
+                payload = {
+                    'kind': 'epoch',
+                    'epoch': float(state.epoch) if state.epoch is not None else None,
+                    'step': int(state.global_step),
+                    'time': datetime.now().isoformat(),
+                }
+                print('METRIC:' + json.dumps(payload), flush=True)
+            except Exception:
+                pass
+
+    trainer.add_callback(JsonLoggerCallback())
     
     # Train
     print(f"\nStarting training for {config.get('epochs', 3)} epochs...")
@@ -163,6 +201,11 @@ def train_transformer(config, job_id):
         }, f, indent=2)
     
     print("\nTraining completed successfully!")
+    try:
+        if wandb_run is not None:
+            wandb_run.finish()
+    except Exception:
+        pass
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

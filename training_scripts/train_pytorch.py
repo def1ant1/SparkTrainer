@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 from datetime import datetime
- 
+
 # Resolve project base directory (two levels up from this script)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -113,6 +113,23 @@ def train_model(config, job_id):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
+    # Optional experiment tracking (best-effort)
+    tracking = config.get('tracking', {}) if isinstance(config.get('tracking'), dict) else {}
+    wandb_run = None
+    tb_writer = None
+    try:
+        if tracking.get('wandb') or os.environ.get('WANDB_API_KEY'):
+            import wandb  # type: ignore
+            wandb_run = wandb.init(project=tracking.get('project', 'dgx-ai-trainer'), config=config, reinit=True)
+    except Exception:
+        wandb_run = None
+    try:
+        if tracking.get('tensorboard'):
+            from torch.utils.tensorboard import SummaryWriter  # type: ignore
+            tb_writer = SummaryWriter(log_dir=os.path.join(BASE_DIR, 'logs', job_id, 'tb'))
+    except Exception:
+        tb_writer = None
+    
     # Create model
     architecture = config.get('architecture', 'custom')
     if architecture == 'resnet':
@@ -160,6 +177,9 @@ def train_model(config, job_id):
     
     print(f"\nStarting training for {num_epochs} epochs...")
     
+    total_steps = num_epochs * len(train_loader)
+    global_step = 0
+    start_time = datetime.now().isoformat()
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
@@ -181,9 +201,46 @@ def train_model(config, job_id):
             total += target.size(0)
             correct += predicted.eq(target).sum().item()
             
+            global_step += 1
             if batch_idx % 10 == 0:
                 print(f"Epoch [{epoch+1}/{num_epochs}] Batch [{batch_idx}/{len(train_loader)}] "
                       f"Loss: {loss.item():.4f}")
+                # Emit JSON metric line for realtime monitoring
+                try:
+                    metric = {
+                        'kind': 'batch',
+                        'epoch': epoch + 1,
+                        'num_epochs': num_epochs,
+                        'batch_idx': batch_idx,
+                        'num_batches': len(train_loader),
+                        'loss': float(loss.item()),
+                        'accuracy': float(correct / total) if total else None,
+                        'lr': float(optimizer.param_groups[0].get('lr', learning_rate)) if hasattr(optimizer, 'param_groups') else None,
+                        'step': global_step,
+                        'total_steps': total_steps,
+                        'time': datetime.now().isoformat(),
+                        'start_time': start_time,
+                    }
+                    print('METRIC:' + json.dumps(metric), flush=True)
+                except Exception:
+                    pass
+                # Experiment trackers
+                try:
+                    if wandb_run is not None:
+                        wandb_run.log({'loss': float(loss.item()), 'accuracy': float(correct/total) if total else None, 'lr': float(optimizer.param_groups[0].get('lr', learning_rate)) if hasattr(optimizer, 'param_groups') else None, 'epoch': epoch+1, 'step': global_step})
+                except Exception:
+                    pass
+                try:
+                    if tb_writer is not None:
+                        tb_writer.add_scalar('loss', float(loss.item()), global_step)
+                        if total:
+                            tb_writer.add_scalar('accuracy', float(correct/total), global_step)
+                        try:
+                            tb_writer.add_scalar('lr', float(optimizer.param_groups[0].get('lr', learning_rate)), global_step)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         
         avg_loss = total_loss / len(train_loader)
         accuracy = 100. * correct / total
@@ -191,6 +248,33 @@ def train_model(config, job_id):
         print(f"\nEpoch {epoch+1}/{num_epochs} Complete:")
         print(f"  Average Loss: {avg_loss:.4f}")
         print(f"  Training Accuracy: {accuracy:.2f}%\n")
+        try:
+            epoch_metric = {
+                'kind': 'epoch',
+                'epoch': epoch + 1,
+                'num_epochs': num_epochs,
+                'avg_loss': float(avg_loss),
+                'accuracy_pct': float(accuracy),
+                'step': global_step,
+                'total_steps': total_steps,
+                'time': datetime.now().isoformat(),
+                'start_time': start_time,
+            }
+            print('METRIC:' + json.dumps(epoch_metric), flush=True)
+        except Exception:
+            pass
+        # Trackers epoch-level
+        try:
+            if wandb_run is not None:
+                wandb_run.log({'epoch_avg_loss': float(avg_loss), 'epoch_accuracy_pct': float(accuracy), 'epoch': epoch+1, 'step': global_step})
+        except Exception:
+            pass
+        try:
+            if tb_writer is not None:
+                tb_writer.add_scalar('epoch_avg_loss', float(avg_loss), epoch+1)
+                tb_writer.add_scalar('epoch_accuracy_pct', float(accuracy), epoch+1)
+        except Exception:
+            pass
     
     # Save model
     save_dir = os.path.join(BASE_DIR, 'models', job_id)
@@ -216,6 +300,17 @@ def train_model(config, job_id):
     
     print(f"\nModel saved to: {save_dir}")
     print("Training completed successfully!")
+    # Finish trackers
+    try:
+        if tb_writer is not None:
+            tb_writer.flush(); tb_writer.close()
+    except Exception:
+        pass
+    try:
+        if wandb_run is not None:
+            wandb_run.finish()
+    except Exception:
+        pass
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
