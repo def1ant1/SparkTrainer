@@ -362,6 +362,88 @@ def model_card_html(model_id):
     html = f"<html><head><meta charset='utf-8'><title>Model Card {model_id}</title></head><body><pre>{content}</pre></body></html>"
     return html
 
+
+def _model_dir(model_id: str) -> str:
+    return os.path.join(MODELS_DIR, model_id)
+
+
+def _dir_size_bytes(path: str) -> int:
+    total = 0
+    for root, _, files in os.walk(path):
+        for fn in files:
+            fp = os.path.join(root, fn)
+            try:
+                total += os.path.getsize(fp)
+            except Exception:
+                pass
+    return total
+
+
+@app.route('/api/models/<model_id>/adapters', methods=['GET'])
+def list_model_adapters(model_id):
+    base = _model_dir(model_id)
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Model not found'}), 404
+    adir = os.path.join(base, 'adapters')
+    items = []
+    if os.path.isdir(adir):
+        for nm in sorted(os.listdir(adir)):
+            p = os.path.join(adir, nm)
+            if not os.path.isdir(p):
+                continue
+            try:
+                st = os.stat(p)
+                items.append({
+                    'name': nm,
+                    'path': os.path.relpath(p, base),
+                    'size_bytes': _dir_size_bytes(p),
+                    'created': datetime.fromtimestamp(st.st_mtime).isoformat()
+                })
+            except Exception:
+                items.append({'name': nm, 'path': os.path.relpath(p, base)})
+    return jsonify({'adapters': items})
+
+
+@app.route('/api/models/<model_id>/adapters/merge', methods=['POST'])
+def merge_model_adapter(model_id):
+    base = _model_dir(model_id)
+    if not os.path.isdir(base):
+        return jsonify({'error': 'Model not found'}), 404
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Missing adapter name'}), 400
+    adir = os.path.join(base, 'adapters', name)
+    if not os.path.isdir(adir):
+        return jsonify({'error': 'Adapter not found'}), 404
+    # Determine task type to pick model class
+    task_type = 'classification'
+    try:
+        cfg_path = os.path.join(base, 'config.json')
+        if os.path.exists(cfg_path):
+            cfg = json.load(open(cfg_path))
+            tt = (cfg.get('task_type') or '').lower()
+            if tt in ('generation', 'causal_lm', 'lm'):
+                task_type = 'generation'
+    except Exception:
+        pass
+    try:
+        from transformers import AutoModelForSequenceClassification, AutoModelForCausalLM
+        from peft import PeftModel
+    except Exception as e:
+        return jsonify({'error': 'Missing dependencies for merge: transformers/peft not available', 'detail': str(e)}), 500
+    try:
+        if task_type == 'generation':
+            base_model = AutoModelForCausalLM.from_pretrained(base)
+        else:
+            base_model = AutoModelForSequenceClassification.from_pretrained(base)
+        peft_model = PeftModel.from_pretrained(base_model, adir)
+        merged = peft_model.merge_and_unload()
+        merged.save_pretrained(base)
+        return jsonify({'status': 'ok', 'merged': True, 'adapter': name})
+    except Exception as e:
+        return jsonify({'error': 'Merge failed', 'detail': str(e)}), 500
+
 @app.route('/api/jobs', methods=['GET'])
 def list_jobs():
     """List all training jobs"""

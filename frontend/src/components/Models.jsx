@@ -149,6 +149,9 @@ export function ModelDetail({ id, api, onBack }) {
   const [tags, setTags] = useState('');
   const [kv, setKv] = useState('');
   const [card, setCard] = useState('');
+  const [adapters, setAdapters] = useState([]);
+  const [mergeName, setMergeName] = useState('');
+  const [merging, setMerging] = useState(false);
   const load = async () => {
     const d = await api.getModel(id);
     setInfo(d);
@@ -186,7 +189,7 @@ export function ModelDetail({ id, api, onBack }) {
         </div>
       </div>
       <div className="flex gap-2 text-sm">
-        {['overview','architecture','metrics','files','card'].map(t => (
+        {['overview','architecture','metrics','files','adapters','card'].map(t => (
           <button key={t} onClick={()=>setTab(t)} className={`px-3 py-2 rounded ${tab===t?'bg-primary text-on-primary':'bg-muted'}`}>{t[0].toUpperCase()+t.slice(1)}</button>
         ))}
       </div>
@@ -240,6 +243,42 @@ export function ModelDetail({ id, api, onBack }) {
               {(info.files||[]).map((f,i)=>(<tr key={i}><td className="px-3 py-1">{f.path}</td><td className="px-3 py-1">{f.size}</td></tr>))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {tab==='adapters' && (
+        <div className="bg-surface p-4 rounded border border-border space-y-3">
+          <div className="text-sm text-text/70">LoRA Adapters saved under this model</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted border-b border-border"><tr><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Path</th><th className="text-left px-3 py-2">Size</th><th className="px-3 py-2"></th></tr></thead>
+              <tbody className="divide-y divide-border">
+                {adapters.map((a)=> (
+                  <tr key={a.name}>
+                    <td className="px-3 py-2 font-semibold">{a.name}</td>
+                    <td className="px-3 py-2 text-xs text-text/70">{a.path}</td>
+                    <td className="px-3 py-2">{a.size_bytes != null ? (a.size_bytes/1e6).toFixed(2)+' MB' : '-'}</td>
+                    <td className="px-3 py-2 text-right"><button className="px-3 py-1 border border-border rounded hover:bg-muted" onClick={()=>setMergeName(a.name)}>Merge…</button></td>
+                  </tr>
+                ))}
+                {adapters.length===0 && (<tr><td className="px-3 py-2 text-sm text-text/60" colSpan={4}>No adapters found</td></tr>)}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end"><button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={async()=>{ const res = await api.listModelAdapters(id); setAdapters(res.adapters||[]); }}>Refresh</button></div>
+          {mergeName && (
+            <div className="p-3 bg-muted rounded border border-border">
+              <div className="text-sm mb-2">Merge adapter <span className="font-semibold">{mergeName}</span> into base model?</div>
+              <div className="flex gap-2">
+                <button disabled={merging} className={`px-3 py-2 rounded ${merging?'bg-muted text-text/60':'bg-primary text-on-primary hover:brightness-110'}`} onClick={async()=>{
+                  setMerging(true);
+                  try { const res = await api.mergeModelAdapter(id, mergeName); if (res && !res.error) { alert('Merged successfully.'); setMergeName(''); const d = await api.getModel(id); setInfo(d); } else { alert('Merge failed: '+(res.error||res.detail||'unknown')); } } finally { setMerging(false); }
+                }}>Confirm Merge</button>
+                <button className="px-3 py-2 border border-border rounded" onClick={()=>setMergeName('')}>Cancel</button>
+              </div>
+              <div className="text-xs text-text/60 mt-1">Merging overwrites base model weights under this model ID. Ensure you have exported or backed up if needed.</div>
+            </div>
+          )}
         </div>
       )}
 
