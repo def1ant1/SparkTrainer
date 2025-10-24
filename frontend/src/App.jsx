@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import JobWizard from './components/JobWizard';
-import { Camera, Activity, Cpu, Database, Plus, List, Settings, Sun, Moon, Monitor } from 'lucide-react';
+import CommandPalette from './components/CommandPalette';
+import QuickStart from './components/QuickStart';
+import { Camera, Activity, Cpu, Database, Plus, List, Settings, Sun, Moon, Monitor, Zap, BarChart3 } from 'lucide-react';
 import { ToastProvider, Button, Input, Modal, useToast, PageTransition } from './components/ui';
 import { ModelsPage, ModelDetail, ModelCompare } from './components/Models';
 import { DatasetsPage } from './components/Datasets';
@@ -1037,6 +1039,17 @@ export default function App() {
   const [partitions, setPartitions] = useState({ gpus: [] });
   const [metrics, setMetrics] = useState({ window_seconds: 3600, interval_seconds: 5, samples: [], jobs: [] });
   const [modelView, setModelView] = useState({ id: null, compareIds: [] });
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [quickStartOpen, setQuickStartOpen] = useState(false);
+  const [jobs, setJobs] = useState([]);
+  const [gpuSeries, setGpuSeries] = useState({}); // { [gpuIndex]: number[] }
+  const [netSeries, setNetSeries] = useState({ rx: [], tx: [] });
+  const userId = 'anonymous';
+  const widgetKey = `dashboard.widgets:${userId}`;
+  const [widgetPrefs, setWidgetPrefs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(widgetKey) || '{}'); } catch { return {}; }
+  });
+  useEffect(() => { try { localStorage.setItem(widgetKey, JSON.stringify(widgetPrefs)); } catch {} }, [widgetPrefs]);
   
   useEffect(() => {
     loadFrameworks();
@@ -1045,7 +1058,26 @@ export default function App() {
     try {
       es = new EventSource(`${API_BASE}/system/stream`);
       es.onmessage = (e) => {
-        try { setSystemInfo(JSON.parse(e.data)); } catch {}
+        try {
+          const data = JSON.parse(e.data);
+          setSystemInfo(data);
+          // update live series
+          setGpuSeries(prev => {
+            const gmap = { ...prev };
+            (data.gpus || []).forEach(g => {
+              const k = String(g.index ?? 0);
+              const arr = (gmap[k] || []).slice(-119);
+              arr.push(g.utilization_gpu_pct ?? 0);
+              gmap[k] = arr;
+            });
+            return gmap;
+          });
+          setNetSeries(prev => {
+            const rx = (prev.rx || []).slice(-119); rx.push(data.net?.rx_rate_bps || 0);
+            const tx = (prev.tx || []).slice(-119); tx.push(data.net?.tx_rate_bps || 0);
+            return { rx, tx };
+          });
+        } catch {}
       };
     } catch (e) {
       // fallback
@@ -1072,6 +1104,28 @@ export default function App() {
     load();
     const t = setInterval(load, 10000);
     return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const load = async () => {
+      try { setJobs(await api.getJobs()); } catch {}
+    };
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Global search shortcut (Cmd+K / Ctrl+K)
+  useEffect(() => {
+    const onKey = (e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
   
   const loadSystemInfo = async () => {
@@ -1172,34 +1226,62 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 py-8">
         <PageTransition>
         {currentPage === 'dashboard' && (
-          <Dashboard onNavigate={setCurrentPage} systemInfo={systemInfo} partitions={partitions} metrics={metrics} />
+          <Dashboard3Col
+            onNavigate={setCurrentPage}
+            systemInfo={systemInfo}
+            partitions={partitions}
+            metrics={metrics}
+            gpuSeries={gpuSeries}
+            netSeries={netSeries}
+            widgetPrefs={widgetPrefs}
+            setWidgetPrefs={setWidgetPrefs}
+            jobs={jobs}
+          />
         )}
         {currentPage === 'create' && (
-          <CreateJob onNavigate={setCurrentPage} frameworks={frameworks} partitions={partitions} />
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <CreateJob onNavigate={setCurrentPage} frameworks={frameworks} partitions={partitions} />
+          </PageWithSidebars>
         )}
         {currentPage === 'wizard' && (
-          <JobWizard onNavigate={setCurrentPage} frameworks={frameworks} partitions={partitions} api={api} />
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <JobWizard onNavigate={setCurrentPage} frameworks={frameworks} partitions={partitions} api={api} />
+          </PageWithSidebars>
         )}
         {currentPage === 'jobs' && (
-          <JobsList onNavigate={setCurrentPage} partitions={partitions} />
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <JobsList onNavigate={setCurrentPage} partitions={partitions} />
+          </PageWithSidebars>
         )}
         {currentPage === 'models' && !modelView.id && modelView.compareIds.length===0 && (
-          <ModelsPage api={api} onOpen={(id)=> setModelView({ id, compareIds: [] })} onCompare={(ids)=> setModelView({ id: null, compareIds: ids })} />
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <ModelsPage api={api} onOpen={(id)=> setModelView({ id, compareIds: [] })} onCompare={(ids)=> setModelView({ id: null, compareIds: ids })} />
+          </PageWithSidebars>
         )}
         {currentPage === 'models' && modelView.id && (
-          <ModelDetail id={modelView.id} api={api} onBack={()=> setModelView({ id: null, compareIds: [] })} />
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <ModelDetail id={modelView.id} api={api} onBack={()=> setModelView({ id: null, compareIds: [] })} />
+          </PageWithSidebars>
         )}
         {currentPage === 'models' && modelView.compareIds.length>0 && (
-          <ModelCompare ids={modelView.compareIds} api={api} onBack={()=> setModelView({ id: null, compareIds: [] })} />
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <ModelCompare ids={modelView.compareIds} api={api} onBack={()=> setModelView({ id: null, compareIds: [] })} />
+          </PageWithSidebars>
         )}
         {currentPage === 'admin' && (
-          <AdminPartitions />
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <AdminPartitions />
+          </PageWithSidebars>
         )}
         {currentPage === 'datasets' && (
-          <DatasetsPage api={api} />
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <DatasetsPage api={api} />
+          </PageWithSidebars>
         )}
         </PageTransition>
       </main>
+      <CommandPalette open={paletteOpen} onClose={()=>setPaletteOpen(false)} api={api} onNavigate={setCurrentPage} />
+      <QuickStart open={quickStartOpen} onClose={()=>setQuickStartOpen(false)} api={api} onDone={()=>setCurrentPage('jobs')} />
     </div>
     </ToastProvider>
   );
@@ -1421,6 +1503,323 @@ function JobsTimeline({ metrics, partitions }) {
   );
 }
 
+// New 3-column dashboard with widgets
+function Dashboard3Col({ onNavigate, systemInfo, partitions, metrics, gpuSeries, netSeries, widgetPrefs, setWidgetPrefs, jobs }) {
+  // Helpers reused from original dashboard
+  const colorFor = (pct) => pct < 70 ? 'bg-green-500' : pct < 85 ? 'bg-yellow-500' : 'bg-red-500';
+  const fmtGiB = (mib) => (mib != null ? (mib / 1024).toFixed(1) : '0.0');
+  const fmtPct = (n) => (n != null ? Math.round(n) : 0);
+  const fmtRate = (bps) => {
+    if (bps == null) return '0 B/s';
+    const K = 1024, M = K*1024, G = M*1024;
+    if (bps >= G) return (bps/G).toFixed(2) + ' GB/s';
+    if (bps >= M) return (bps/M).toFixed(2) + ' MB/s';
+    if (bps >= K) return (bps/K).toFixed(2) + ' KB/s';
+    return bps.toFixed(0) + ' B/s';
+  };
+
+  const defaultWidgets = [
+    { id: 'gpu_spark', title: 'GPU Utilization', size: 'md', visible: true },
+    { id: 'temp_heat', title: 'Temperature Heatmap', size: 'sm', visible: true },
+    { id: 'power', title: 'Power Meters', size: 'sm', visible: true },
+    { id: 'net', title: 'Network Throughput', size: 'md', visible: true },
+    { id: 'gpu_status', title: 'GPU Status', size: 'lg', visible: true },
+    { id: 'mem', title: 'Memory', size: 'md', visible: true },
+    { id: 'io', title: 'I/O', size: 'md', visible: true },
+    { id: 'timeline', title: 'Timelines', size: 'lg', visible: true },
+  ];
+  const widgets = (widgetPrefs?.order?.length ? widgetPrefs.order : defaultWidgets.map(w => w.id)).map(id => {
+    const base = defaultWidgets.find(w => w.id === id) || { id, size: 'md', visible: true };
+    const ow = (widgetPrefs?.items || {})[id] || {};
+    return { ...base, ...ow };
+  });
+  const sizeCls = (sz) => sz === 'lg' ? 'col-span-12' : sz === 'md' ? 'col-span-12 md:col-span-6' : 'col-span-12 md:col-span-4';
+  const updateItem = (id, patch) => {
+    const items = { ...(widgetPrefs.items||{}) };
+    items[id] = { ...(items[id]||{}), ...patch };
+    setWidgetPrefs({ items, order: widgetPrefs.order && widgetPrefs.order.length ? widgetPrefs.order : defaultWidgets.map(w=>w.id) });
+  };
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-3xl font-bold">DGX AI Trainer Dashboard</h1>
+      <div className="grid grid-cols-12 gap-4">
+        {/* Left: customize widgets only */}
+        <div className="col-span-12 lg:col-span-3 space-y-4">
+          <div className="bg-surface p-4 rounded-lg border border-border">
+            <div className="text-sm text-text/70 mb-2">Customize Widgets</div>
+            {defaultWidgets.map(w => (
+              <label key={w.id} className="flex items-center justify-between text-sm py-1">
+                <span>{w.title}</span>
+                <input type="checkbox" checked={(widgetPrefs.items?.[w.id]?.visible ?? w.visible)} onChange={e=>updateItem(w.id, { visible: e.target.checked })} />
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Center: main widgets */}
+        <div className="col-span-12 lg:col-span-6 space-y-4">
+          <div className="grid grid-cols-12 gap-4">
+            <div className="col-span-12 md:col-span-6 bg-surface p-6 rounded-lg border border-border">
+              <div className="flex items-center justify-between"><div><div className="text-sm text-text/70">GPUs</div><div className="text-2xl font-bold text-blue-600">{systemInfo.gpus?.length||0}</div></div><Cpu className="text-blue-500" size={32} /></div>
+            </div>
+            <div className="col-span-12 md:col-span-6 bg-surface p-6 rounded-lg border border-border">
+              <div className="flex items-center justify-between"><div><div className="text-sm text-text/70">Jobs Running</div><div className="text-2xl font-bold text-green-600">{systemInfo.jobs_running ?? 0}</div></div><Activity className="text-green-500" size={32} /></div>
+            </div>
+          </div>
+          <div className="grid grid-cols-12 gap-4">
+            {widgets.filter(w => w.visible !== false).map(w => (
+              <div key={w.id} className={`${sizeCls(w.size)} bg-surface p-4 rounded-lg border border-border`} draggable onDragStart={(e)=>{ e.dataTransfer.setData('text/plain', w.id); }} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>{
+                const from = e.dataTransfer.getData('text/plain');
+                if (!from || from === w.id) return;
+                const ord = (widgetPrefs.order && widgetPrefs.order.length ? widgetPrefs.order : defaultWidgets.map(x=>x.id)).slice();
+                const a = ord.indexOf(from); const b = ord.indexOf(w.id);
+                if (a===-1||b===-1) return;
+                ord.splice(a,1); ord.splice(b,0,from);
+                setWidgetPrefs({ items: widgetPrefs.items||{}, order: ord });
+              }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-semibold">{defaultWidgets.find(d=>d.id===w.id)?.title || w.id}</div>
+                  <select className="border border-border rounded px-2 py-1 bg-surface text-xs" value={w.size} onChange={e=>updateItem(w.id, { size: e.target.value })}>
+                    <option value="sm">Small</option>
+                    <option value="md">Medium</option>
+                    <option value="lg">Large</option>
+                  </select>
+                </div>
+                {w.id === 'gpu_spark' && <GPUSparklines systemInfo={systemInfo} gpuSeries={gpuSeries} />}
+                {w.id === 'temp_heat' && <GPUTemperatureHeatmap systemInfo={systemInfo} />}
+                {w.id === 'power' && <GPUPowerMeters systemInfo={systemInfo} />}
+                {w.id === 'net' && <NetworkSpark netSeries={netSeries} />}
+                {w.id === 'gpu_status' && (
+                  <div className="space-y-3">
+                    {systemInfo.gpus?.length ? systemInfo.gpus.map((gpu, i) => {
+                      const usedMiB = gpu.memory_used_mib ?? 0;
+                      const totalMiB = gpu.memory_total_mib ?? 0;
+                      const pct = gpu.memory_used_pct ?? (totalMiB ? Math.round((usedMiB / totalMiB) * 100) : 0);
+                      return (
+                        <div key={i} className="p-3 bg-muted rounded-lg border border-border">
+                          <div className="flex justify-between text-sm"><div className="font-semibold">{gpu.name} — GPU {gpu.index ?? i}</div><div>{fmtGiB(usedMiB)} / {fmtGiB(totalMiB)} GiB</div></div>
+                          <div className="mt-2 w-full bg-muted rounded h-3"><div className={`${colorFor(pct)} h-3 rounded`} style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} /></div>
+                        </div>
+                      );
+                    }) : <div className="text-sm text-text/60">No GPUs</div>}
+                  </div>
+                )}
+                {w.id === 'mem' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <p className="text-sm text-text/70">RAM</p>
+                      <div className="flex items-center justify-between mt-1">
+                        <div className="flex-1 mr-3">
+                          <div className="w-full bg-muted rounded h-3">
+                            <div className={`h-3 rounded ${colorFor(systemInfo.memory?.used_pct ?? 0)}`} style={{ width: `${Math.min(100, Math.max(0, systemInfo.memory?.used_pct ?? 0))}%` }} />
+                          </div>
+                        </div>
+                        <div className="text-sm font-semibold">{fmtPct(systemInfo.memory?.used_pct)}%</div>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm text-text/70">Swap</p>
+                      <div className="flex items-center justify-between mt-1">
+                        <div className="flex-1 mr-3">
+                          <div className="w-full bg-muted rounded h-3">
+                            <div className={`h-3 rounded ${colorFor(systemInfo.swap?.used_pct ?? 0)}`} style={{ width: `${Math.min(100, Math.max(0, systemInfo.swap?.used_pct ?? 0))}%` }} />
+                          </div>
+                        </div>
+                        <div className="text-sm font-semibold">{fmtPct(systemInfo.swap?.used_pct)}%</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {w.id === 'io' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="p-4 bg-muted rounded border border-border">
+                      <p className="text-sm text-text/70">Network</p>
+                      <div className="mt-2 text-sm">
+                        <div><span className="text-text/70">Receive:</span> <span className="font-semibold">{fmtRate(systemInfo.net?.rx_rate_bps)}</span></div>
+                        <div><span className="text-text/70">Transmit:</span> <span className="font-semibold">{fmtRate(systemInfo.net?.tx_rate_bps)}</span></div>
+                      </div>
+                    </div>
+                    <div className="p-4 bg-muted rounded border border-border">
+                      <p className="text-sm text-text/70 mb-2">Disks</p>
+                      <div className="space-y-2">
+                        {(systemInfo.disks || []).map((d, i) => (
+                          <div key={i}>
+                            <div className="flex justify-between text-xs text-text/70"><span>{d.path}</span><span>{d.used_gib} / {d.total_gib} GiB</span></div>
+                            <div className="w-full bg-muted rounded h-2"><div className={`${colorFor(d.used_pct ?? 0)} h-2 rounded`} style={{ width: `${Math.min(100, Math.max(0, d.used_pct ?? 0))}%` }} /></div>
+                          </div>
+                        ))}
+                        {(!systemInfo.disks || systemInfo.disks.length === 0) && (<div className="text-xs text-text/60">No disk info</div>)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {w.id === 'timeline' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <div>
+                        <p className="text-sm text-text/70 mb-2">GPU Utilization (%)</p>
+                        <LineChart data={metrics?.samples||[]} seriesFrom={(s)=>{
+                          const map = {};
+                          (s[0]?.gpus||[]).forEach(g => { map[`gpu-${g.index}`] = {label:`GPU ${g.index}`, color: 'blue'}; });
+                          return map;
+                        }} yKeyFor={(s, key)=>{
+                          const idx = parseInt(String(key).split('-')[1]||'0');
+                          const g = (s.gpus||[]).find(x => x.index===idx);
+                          return g?.util_pct ?? 0;
+                        }} />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-sm text-text/70">Memory Usage (%)</p>
+                          <a href={`${API_BASE}/system/metrics/history.csv`} className="text-primary hover:brightness-110 text-sm">Export CSV</a>
+                        </div>
+                        <LineChart data={metrics?.samples||[]} seriesFrom={()=>({ 'gpu-mem': {label:'GPU Mem', color:'blue'}, 'sys-mem': {label:'System RAM', color:'green'} })} yKeyFor={(s,key)=> key==='gpu-mem' ? (s.gpu_mem_used_pct ?? 0) : (s.sys_mem_used_pct ?? 0)} />
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <p className="text-sm text-text/70 mb-2">Active Jobs</p>
+                      <JobsTimeline metrics={metrics} partitions={partitions} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-4">
+            <Button variant="primary" className="flex-1 py-4" onClick={()=>onNavigate('create')} leftIcon={<Plus size={20} />}>Create New Training Job</Button>
+            <Button variant="ghost" className="flex-1 py-4" onClick={()=>onNavigate('jobs')} leftIcon={<List size={20} />}>View All Jobs</Button>
+          </div>
+        </div>
+
+        {/* Right: activity & notifications */}
+        <div className="col-span-12 lg:col-span-3 space-y-4">
+          <div className="bg-surface p-4 rounded-lg border border-border">
+            <div className="text-sm font-semibold mb-2">Activity Feed</div>
+            <div className="space-y-2 max-h-[420px] overflow-auto">
+              {(jobs||[]).slice().reverse().slice(0,20).map(j => (
+                <div key={j.id} className="p-2 bg-muted rounded border border-border text-sm">
+                  <div className="flex justify-between"><div className="font-semibold truncate mr-2">{j.name}</div><div className="text-xs text-text/60">{j.status}</div></div>
+                  <div className="text-xs text-text/70">{j.framework}</div>
+                </div>
+              ))}
+              {(!jobs || jobs.length===0) && <div className="text-sm text-text/60">No recent activity</div>}
+            </div>
+          </div>
+          <div className="bg-surface p-4 rounded-lg border border-border">
+            <div className="text-sm font-semibold mb-2">Notifications</div>
+            <div className="space-y-2 text-sm">
+              {(() => {
+                const alerts = [];
+                (systemInfo.gpus||[]).forEach((g,i)=>{
+                  if ((g.temperature_gpu_c||0) >= 80) alerts.push(`GPU ${g.index ?? i} high temperature: ${g.temperature_gpu_c} °C`);
+                  if ((g.utilization_gpu_pct||0) >= 95) alerts.push(`GPU ${g.index ?? i} high utilization: ${g.utilization_gpu_pct}%`);
+                });
+                if ((systemInfo.memory?.used_pct||0) >= 90) alerts.push(`System RAM high: ${Math.round(systemInfo.memory.used_pct)}%`);
+                return alerts.length ? alerts.map((a, i)=>(<div key={i} className="p-2 bg-yellow-50 border border-yellow-200 rounded">{a}</div>)) : <div className="text-text/60">No alerts</div>;
+              })()}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GPUSparklines({ systemInfo, gpuSeries }){
+  const keys = (systemInfo.gpus||[]).map(g => String(g.index ?? 0));
+  return (
+    <div className="space-y-2">
+      {keys.map(k => {
+        const arr = gpuSeries[k] || [];
+        return (
+          <div key={k} className="flex items-center gap-2">
+            <div className="w-16 text-xs text-text/70">GPU {k}</div>
+            <Sparkline data={arr} color="#2563eb" />
+            <div className="text-xs text-text/70 w-10 text-right">{arr.length? Math.round(arr[arr.length-1]) : 0}%</div>
+          </div>
+        );
+      })}
+      {keys.length===0 && <div className="text-sm text-text/60">No GPUs</div>}
+    </div>
+  );
+}
+
+function GPUTemperatureHeatmap({ systemInfo }){
+  const temps = (systemInfo.gpus||[]).map(g => g.temperature_gpu_c||0);
+  const color = (t)=> t>=85? '#ef4444' : t>=75? '#f59e0b' : '#22c55e';
+  return (
+    <div className="flex flex-wrap gap-2">
+      {temps.map((t,i)=>(
+        <div key={i} title={`GPU ${i}: ${t} °C`} className="w-8 h-8 rounded" style={{ background: color(t) }} />
+      ))}
+      {temps.length===0 && <div className="text-sm text-text/60">No data</div>}
+    </div>
+  );
+}
+
+function GPUPowerMeters({ systemInfo }){
+  const gpus = systemInfo.gpus||[];
+  return (
+    <div className="space-y-2">
+      {gpus.map((g,i)=>{
+        const p = g.power_draw_w ?? 0; const lim = g.power_limit_w || Math.max(p, 1);
+        const pct = Math.min(100, Math.round((p/lim)*100));
+        return (
+          <div key={i} className="text-xs">
+            <div className="flex justify-between mb-1"><span>GPU {g.index ?? i}</span><span>{p? p.toFixed(0):'-'}W / {lim? lim.toFixed(0):'-'}W</span></div>
+            <div className="w-full bg-muted rounded h-2"><div className="h-2 rounded" style={{ width: pct+'%', background: pct>85? '#ef4444' : pct>70? '#f59e0b' : '#22c55e' }} /></div>
+          </div>
+        );
+      })}
+      {gpus.length===0 && <div className="text-sm text-text/60">No GPUs</div>}
+    </div>
+  );
+}
+
+function NetworkSpark({ netSeries }){
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="text-xs text-text/70 mb-1">RX</div>
+        <Sparkline data={netSeries.rx||[]} color="#16a34a" formatter={(v)=>formatRate(v)} />
+      </div>
+      <div>
+        <div className="text-xs text-text/70 mb-1">TX</div>
+        <Sparkline data={netSeries.tx||[]} color="#f59e0b" formatter={(v)=>formatRate(v)} />
+      </div>
+    </div>
+  );
+}
+
+function formatRate(bps){
+  const K=1024,M=K*1024,G=M*1024;
+  if (bps>=G) return (bps/G).toFixed(1)+' GB/s';
+  if (bps>=M) return (bps/M).toFixed(1)+' MB/s';
+  if (bps>=K) return (bps/K).toFixed(1)+' KB/s';
+  return (bps||0).toFixed(0)+' B/s';
+}
+
+function Sparkline({ data=[], color="#2563eb", width=240, height=32, formatter }){
+  const w = width, h = height, pad=2;
+  const max = Math.max(1, ...data);
+  const min = Math.min(0, ...data);
+  const pts = data.map((v,i)=>{
+    const x = pad + (i/(Math.max(1,data.length-1))) * (w-2*pad);
+    const y = pad + (1 - (v-min)/(max-min || 1)) * (h-2*pad);
+    return `${x},${y}`;
+  }).join(' ');
+  const last = data[data.length-1]||0;
+  return (
+    <div className="flex items-center gap-2">
+      <svg width={w} height={h} className="block">
+        <polyline fill="none" stroke={color} strokeWidth="2" points={pts} />
+      </svg>
+      {formatter && <div className="text-xs text-text/70 w-16">{formatter(last)}</div>}
+    </div>
+  );
+}
+
 function AdminPartitions() {
   const [cfg, setCfg] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
@@ -1500,6 +1899,53 @@ function AdminPartitions() {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// Shared quick actions and right-side panels
+function ActivityNotifications({ jobs, systemInfo }){
+  return (
+    <div className="space-y-4">
+      <div className="bg-surface p-4 rounded-lg border border-border">
+        <div className="text-sm font-semibold mb-2">Activity Feed</div>
+        <div className="space-y-2 max-h-[420px] overflow-auto">
+          {(jobs||[]).slice().reverse().slice(0,20).map(j => (
+            <div key={j.id} className="p-2 bg-muted rounded border border-border text-sm">
+              <div className="flex justify-between"><div className="font-semibold truncate mr-2">{j.name}</div><div className="text-xs text-text/60">{j.status}</div></div>
+              <div className="text-xs text-text/70">{j.framework}</div>
+            </div>
+          ))}
+          {(!jobs || jobs.length===0) && <div className="text-sm text-text/60">No recent activity</div>}
+        </div>
+      </div>
+      <div className="bg-surface p-4 rounded-lg border border-border">
+        <div className="text-sm font-semibold mb-2">Notifications</div>
+        <div className="space-y-2 text-sm">
+          {(() => {
+            const alerts = [];
+            (systemInfo.gpus||[]).forEach((g,i)=>{
+              if ((g.temperature_gpu_c||0) >= 80) alerts.push(`GPU ${g.index ?? i} high temperature: ${g.temperature_gpu_c} °C`);
+              if ((g.utilization_gpu_pct||0) >= 95) alerts.push(`GPU ${g.index ?? i} high utilization: ${g.utilization_gpu_pct}%`);
+            });
+            if ((systemInfo.memory?.used_pct||0) >= 90) alerts.push(`System RAM high: ${Math.round(systemInfo.memory.used_pct)}%`);
+            return alerts.length ? alerts.map((a, i)=>(<div key={i} className="p-2 bg-yellow-50 border border-yellow-200 rounded">{a}</div>)) : <div className="text-text/60">No alerts</div>;
+          })()}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PageWithSidebars({ children, onNavigate, jobs, systemInfo }){
+  return (
+    <div className="grid grid-cols-12 gap-4">
+      <div className="col-span-12 lg:col-span-9 space-y-4">
+        {children}
+      </div>
+      <div className="col-span-12 lg:col-span-3 space-y-4">
+        <ActivityNotifications jobs={jobs} systemInfo={systemInfo} />
+      </div>
     </div>
   );
 }

@@ -914,13 +914,21 @@ def _parse_gpu_info() -> Dict[str, Any]:
         # Ask for raw numbers (no units) to avoid parsing issues
         out = subprocess.check_output([
             'nvidia-smi',
-            '--query-gpu=name,index,memory.total,memory.free,utilization.gpu,temperature.gpu',
+            '--query-gpu=name,index,memory.total,memory.free,utilization.gpu,temperature.gpu,power.draw,power.limit',
             '--format=csv,noheader,nounits'
         ]).decode()
         for line in out.strip().split('\n'):
             parts = [p.strip() for p in line.split(',')]
-            if len(parts) == 6:
-                name, idx_s, total_s, free_s, util_s, temp_s = parts
+            if len(parts) >= 6:
+                # Power metrics may be missing on some GPUs; guard by length
+                name = parts[0]
+                idx_s = parts[1]
+                total_s = parts[2]
+                free_s = parts[3]
+                util_s = parts[4]
+                temp_s = parts[5]
+                power_draw_s = parts[6] if len(parts) > 6 else None
+                power_limit_s = parts[7] if len(parts) > 7 else None
                 try:
                     idx = int(idx_s)
                 except Exception:
@@ -930,11 +938,18 @@ def _parse_gpu_info() -> Dict[str, Any]:
                         return int(float(s))
                     except Exception:
                         return 0
+                def to_float_or_none(s: str):
+                    try:
+                        return float(s)
+                    except Exception:
+                        return None
                 total = to_int(total_s)      # MiB
                 free = to_int(free_s)        # MiB
                 used = max(0, total - free)  # MiB
                 util = to_int(util_s)        # %
                 temp = to_int(temp_s)        # Celsius
+                p_draw = to_float_or_none(power_draw_s) if power_draw_s and power_draw_s not in ('N/A', '') else None
+                p_limit = to_float_or_none(power_limit_s) if power_limit_s and power_limit_s not in ('N/A', '') else None
                 used_pct = round((used / total) * 100, 1) if total > 0 else 0.0
                 free_pct = round((free / total) * 100, 1) if total > 0 else 0.0
                 gpus.append({
@@ -947,6 +962,8 @@ def _parse_gpu_info() -> Dict[str, Any]:
                     'memory_free_pct': free_pct,
                     'utilization_gpu_pct': util,
                     'temperature_gpu_c': temp,
+                    'power_draw_w': p_draw,
+                    'power_limit_w': p_limit,
                 })
     except Exception:
         gpus = []
