@@ -122,6 +122,100 @@ Fine-tune GPT-2 for text generation tasks.
 
 ---
 
+## Advanced Training Strategies (LoRA/QLoRA optional)
+
+Multi-stage pipeline with curriculum learning, knowledge distillation, mixed precision, and distributed options for Hugging Face models.
+
+```json
+{
+  "name": "HF Advanced Fine-tune",
+  "type": "finetune",
+  "framework": "huggingface",
+  "config": {
+    "model_name": "gpt2",
+    "task_type": "generation",
+    "max_length": 256,
+    "compute_dtype": "bf16",
+
+    "lora": {
+      "enabled": true,
+      "r": 8,
+      "alpha": 16,
+      "dropout": 0.05,
+      "qlora": false
+    },
+
+    "stages": [
+      {"name": "warmup", "epochs": 1, "learning_rate": 5e-5, "batch_size": 8,
+       "curriculum": {"incremental": true, "mode": "length", "start_frac": 0.4, "end_frac": 0.8}},
+      {"name": "main", "epochs": 2, "learning_rate": 3e-5, "batch_size": 8},
+      {"name": "refinement", "epochs": 1, "learning_rate": 1e-5, "batch_size": 8}
+    ],
+
+    "distillation": {
+      "enabled": true,
+      "teacher_model": "gpt2-medium",
+      "temperature": 2.0,
+      "alpha_distill": 0.5,
+      "alpha_ce": 0.5
+    },
+
+    "grad_clip": {"type": "norm", "max_grad_norm": 1.0},
+
+    "distributed": {
+      "deepspeed": null,
+      "fsdp": null,
+      "gradient_accumulation_steps": 2
+    }
+  }
+}
+```
+
+Notes:
+- Set `precision` to `fp16`/`bf16`/`fp8` or use `compute_dtype` (fp16/bf16) to control mixed precision.
+- Use `distributed.deepspeed` with a path to a DeepSpeed JSON config, or `distributed.fsdp` with an FSDP config string.
+- Multi-node/multi-GPU execution typically requires launching with `torchrun` outside the backend process.
+
+---
+
+## DeepSpeed Config Templates
+
+You can use these ready-to-go configs with Hugging Face Trainer by pointing `config.distributed.deepspeed` to their path.
+
+- ZeRO-2: `training_scripts/deepspeed/zero2.json`
+- ZeRO-3: `training_scripts/deepspeed/zero3.json`
+
+Example snippet:
+
+```json
+{
+  "name": "HF + DeepSpeed",
+  "type": "finetune",
+  "framework": "huggingface",
+  "config": {
+    "model_name": "gpt2",
+    "task_type": "generation",
+    "stages": [{"name":"main","epochs":2,"learning_rate":3e-5,"batch_size":8}],
+    "distributed": {
+      "deepspeed": "training_scripts/deepspeed/zero2.json",
+      "gradient_accumulation_steps": 2
+    }
+  }
+}
+```
+
+Note: Ensure the environment has DeepSpeed installed and launch via `torchrun` for multi-GPU/multi-node setups.
+
+---
+## Ready-to-run Advanced Examples
+
+- Advanced HF + DeepSpeed (ZeRO-2): `jobs/examples/hf_advanced_deepspeed.json`
+- Advanced HF + DeepSpeed (ZeRO-3): `jobs/examples/hf_advanced_deepspeed_zero3.json`
+
+Load one of these examples via the Jobs API or copy its `config` into the Wizard’s Review step.
+
+---
+
 ## Custom Architecture
 
 Train a custom fully-connected network for structured data.

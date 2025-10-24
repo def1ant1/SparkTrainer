@@ -35,6 +35,9 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
   const [gradAccum, setGradAccum] = useState(1);
   const [earlyStop, setEarlyStop] = useState({ enabled: false, patience: 3 });
   const [checkpoint, setCheckpoint] = useState({ strategy: 'best', every_epochs: 1 });
+  // Precision + grad clip
+  const [precision, setPrecision] = useState(''); // '', fp16, bf16, fp8
+  const [gradClip, setGradClip] = useState({ type: 'norm', max_grad_norm: 1.0, max_value: 1.0 });
 
   // Fine-tune specific
   const [hfModel, setHfModel] = useState('bert-base-uncased');
@@ -46,6 +49,37 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
   const [doubleQuant, setDoubleQuant] = useState(true);
   const [computeDtype, setComputeDtype] = useState('bfloat16'); // bfloat16|float16|float32
   const [gradCheckpoint, setGradCheckpoint] = useState(false);
+
+  // Advanced Training Strategies
+  const [enableStages, setEnableStages] = useState(false);
+  const [stages, setStages] = useState([
+    { name: 'warmup', epochs: 1, learning_rate: 5e-5, batch_size: 8, curriculum: { incremental: true, mode: 'length', start_frac: 0.4, end_frac: 0.8 } },
+    { name: 'main', epochs: 2, learning_rate: 3e-5, batch_size: 8 },
+    { name: 'refinement', epochs: 1, learning_rate: 1e-5, batch_size: 8 }
+  ]);
+
+  // Knowledge Distillation
+  const [distill, setDistill] = useState({ enabled: false, teacher_model: '', multi_teachers: '', temperature: 2.0, alpha_distill: 0.5, alpha_ce: 0.5 });
+
+  // Distributed
+  const [dsPath, setDsPath] = useState('');
+  const [fsdp, setFsdp] = useState('');
+  const [ddpFindUnused, setDdpFindUnused] = useState(false);
+  const [fsdpMinParams, setFsdpMinParams] = useState(0);
+
+  // Context window extension (HF only)
+  const [ctxEnabled, setCtxEnabled] = useState(false);
+  const [ctxTargetLen, setCtxTargetLen] = useState(8192);
+  const [ctxRopeMethod, setCtxRopeMethod] = useState('linear'); // linear|dynamic|yarn
+  const [ctxSchedulePreset, setCtxSchedulePreset] = useState('4-8-16-32');
+  const [ctxCustomSchedule, setCtxCustomSchedule] = useState('4096,8192,16384,32768');
+  const [longloraEnabled, setLongloraEnabled] = useState(false);
+  const [longloraShifted, setLongloraShifted] = useState(false);
+  const [evalPpl, setEvalPpl] = useState(true);
+  const [evalNeedle, setEvalNeedle] = useState(true);
+  const [evalLongQA, setEvalLongQA] = useState(false);
+  const [evalLengths, setEvalLengths] = useState('4096,8192,16384');
+  const [preferCtxScript, setPreferCtxScript] = useState(true);
 
   // Architecture custom params (simple)
   const [customArch, setCustomArch] = useState({ input_size: 784, output_size: 10, hidden_layers: '512,256,128' });
@@ -80,6 +114,19 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
     gpt2_ft: {
       framework: 'huggingface', arch: 'transformer', model: 'gpt2', epochs: 3, batchSize: 8, lr: 5e-5,
       data: { source: 'huggingface', dataset_name: 'wikitext' }
+    },
+    hf_advanced_balanced: {
+      framework: 'huggingface', arch: 'transformer', model: 'gpt2', epochs: 4, batchSize: 8, lr: 3e-5,
+      advanced: {
+        stages: [
+          { name: 'warmup', epochs: 1, learning_rate: 5e-5, batch_size: 8, curriculum: { incremental: true, mode: 'length', start_frac: 0.4, end_frac: 0.8 } },
+          { name: 'main', epochs: 2, learning_rate: 3e-5, batch_size: 8 },
+          { name: 'refinement', epochs: 1, learning_rate: 1e-5, batch_size: 8 }
+        ],
+        distillation: { enabled: true, teacher_model: 'gpt2-medium', temperature: 2.0, alpha_distill: 0.5, alpha_ce: 0.5 },
+        precision: 'bf16',
+        grad_clip: { type: 'norm', max_grad_norm: 1.0 }
+      }
     }
   }), []);
 
@@ -92,6 +139,13 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
     setEpochs(p.epochs);
     setBatchSize(p.batchSize);
     setLr(p.lr);
+    if (p.advanced) {
+      setEnableStages(true);
+      setStages(p.advanced.stages || stages);
+      setDistill(pv => ({...pv, ...(p.advanced.distillation||{}), enabled: !!(p.advanced.distillation?.enabled)}));
+      if (p.advanced.precision) setPrecision(p.advanced.precision);
+      if (p.advanced.grad_clip) setGradClip(p.advanced.grad_clip);
+    }
     if (p.data) {
       if (p.data.source) setDataSource(p.data.source);
       if (p.data.dataset_name) setHfDataset(p.data.dataset_name);
@@ -110,6 +164,7 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
       epochs, batch_size: batchSize, learning_rate: lr,
       optimizer, scheduler,
       mixed_precision: amp,
+      precision: precision || undefined,
       gradient_accumulation_steps: gradAccum,
       early_stopping: earlyStop,
       checkpoint: checkpoint,
@@ -136,6 +191,47 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
         cfg.compute_dtype = computeDtype;
       }
       cfg.gradient_checkpointing = gradCheckpoint;
+      if (enableStages) cfg.stages = stages.map(s => ({
+        name: s.name,
+        epochs: parseInt(s.epochs)||1,
+        learning_rate: parseFloat(s.learning_rate)||lr,
+        batch_size: parseInt(s.batch_size)||batchSize,
+        ...(s.curriculum ? { curriculum: {
+          incremental: !!s.curriculum.incremental,
+          mode: s.curriculum.mode || 'length',
+          start_frac: parseFloat(s.curriculum.start_frac ?? 0.5),
+          end_frac: parseFloat(s.curriculum.end_frac ?? 1.0)
+        }} : {})
+      }));
+      if (distill.enabled) {
+        cfg.distillation = {
+          enabled: true,
+          teacher_model: distill.teacher_model || undefined,
+          multi_teachers: (distill.multi_teachers||'').split(',').map(s=>s.trim()).filter(Boolean),
+          temperature: parseFloat(distill.temperature)||2.0,
+          alpha_distill: parseFloat(distill.alpha_distill)||0.5,
+          alpha_ce: parseFloat(distill.alpha_ce)||0.5,
+        };
+      }
+      cfg.grad_clip = gradClip;
+      // Distributed opts
+      const dist = {};
+      if (dsPath) dist.deepspeed = dsPath;
+      if (fsdp) dist.fsdp = fsdp;
+      if (ddpFindUnused) dist.ddp_find_unused_parameters = true;
+      if (fsdpMinParams) dist.fsdp_min_num_params = parseInt(fsdpMinParams);
+      if (Object.keys(dist).length) cfg.distributed = dist;
+      if (ctxEnabled) {
+        const sched = ctxSchedulePreset==='custom' ? ctxCustomSchedule.split(',').map(s=>parseInt(s.trim())).filter(Boolean) : (ctxSchedulePreset==='8-16-32-64' ? [8192,16384,32768,65536] : [4096,8192,16384,32768]);
+        cfg.context_extension = {
+          enabled: true,
+          rope: { method: ctxRopeMethod, target_length: Math.max(2048, Math.min(131072, parseInt(ctxTargetLen)||8192)) },
+          longlora: { enabled: longloraEnabled, shifted_sparse_attention: longloraShifted },
+          route: preferCtxScript,
+          schedule: sched,
+          eval: { run_ppl: evalPpl, run_needle: evalNeedle, run_long_qa: evalLongQA, lengths: evalLengths.split(',').map(s=>parseInt(s.trim())).filter(Boolean) }
+        };
+      }
     }
     if (framework === 'pytorch' && arch === 'custom') {
       cfg.input_size = customArch.input_size;
@@ -212,6 +308,7 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
               <button onClick={()=>applyPreset('imagenet')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">ImageNet (ResNet)</button>
               <button onClick={()=>applyPreset('bert_cls')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">BERT Fine-tune</button>
               <button onClick={()=>applyPreset('gpt2_ft')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">GPT-2 Fine-tune</button>
+              <button onClick={()=>applyPreset('hf_advanced_balanced')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">HF Advanced (Curriculum + KD)</button>
             </div>
           </div>
 
@@ -450,10 +547,139 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
                     )}
                   </div>
                   <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={gradCheckpoint} onChange={e=>setGradCheckpoint(e.target.checked)}/> Gradient Checkpointing</label></div>
-                </>
+              </>
+          )}
+          </div>
+        </details>
+
+        {/* Advanced Training Strategies */}
+        {framework==='huggingface' && (
+          <details className="mt-2">
+            <summary className="cursor-pointer text-sm font-semibold">Advanced Training Strategies</summary>
+            <div className="mt-2 grid grid-cols-1 gap-4">
+              <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={enableStages} onChange={e=>setEnableStages(e.target.checked)}/> Enable Multi‑stage Pipeline</label></div>
+              {enableStages && (
+                <div className="space-y-2">
+                  {stages.map((s, idx)=> (
+                    <div key={idx} className="border border-border rounded p-3">
+                      <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                        <label className="text-xs">Name<input className="w-full border rounded px-2 py-1" value={s.name} onChange={e=>{const a=[...stages]; a[idx]={...a[idx], name:e.target.value}; setStages(a);}}/></label>
+                        <label className="text-xs">Epochs<input type="number" className="w-full border rounded px-2 py-1" value={s.epochs} onChange={e=>{const a=[...stages]; a[idx]={...a[idx], epochs: parseInt(e.target.value)||1}; setStages(a);}}/></label>
+                        <label className="text-xs">LR<input type="number" step="0.000001" className="w-full border rounded px-2 py-1" value={s.learning_rate} onChange={e=>{const a=[...stages]; a[idx]={...a[idx], learning_rate: parseFloat(e.target.value)||0}; setStages(a);}}/></label>
+                        <label className="text-xs">Batch<input type="number" className="w-full border rounded px-2 py-1" value={s.batch_size} onChange={e=>{const a=[...stages]; a[idx]={...a[idx], batch_size: parseInt(e.target.value)||1}; setStages(a);}}/></label>
+                        <div className="flex items-end justify-end gap-2">
+                          <button type="button" className="text-xs px-2 py-1 border rounded" onClick={()=>{
+                            const a=[...stages]; a.splice(idx,1); setStages(a);
+                          }}>Remove</button>
+                        </div>
+                      </div>
+                      <div className="mt-2 grid grid-cols-1 md:grid-cols-5 gap-2 text-xs">
+                        <div className="md:col-span-5 font-semibold">Curriculum</div>
+                        <label className="inline-flex items-center gap-2"><input type="checkbox" checked={!!(s.curriculum?.incremental)} onChange={e=>{const a=[...stages]; a[idx]={...a[idx], curriculum:{...(s.curriculum||{}), incremental:e.target.checked}}; setStages(a);}}/> Incremental</label>
+                        <label>Mode
+                          <select className="w-full border rounded px-2 py-1" value={s.curriculum?.mode||'length'} onChange={e=>{const a=[...stages]; a[idx]={...a[idx], curriculum:{...(s.curriculum||{}), mode:e.target.value}}; setStages(a);}}>
+                            <option value="length">Length (easy→hard)</option>
+                            <option value="random">Random</option>
+                          </select>
+                        </label>
+                        <label>Start frac<input type="number" step="0.05" className="w-full border rounded px-2 py-1" value={s.curriculum?.start_frac ?? 0.5} onChange={e=>{const a=[...stages]; a[idx]={...a[idx], curriculum:{...(s.curriculum||{}), start_frac: parseFloat(e.target.value)||0.5}}; setStages(a);}}/></label>
+                        <label>End frac<input type="number" step="0.05" className="w-full border rounded px-2 py-1" value={s.curriculum?.end_frac ?? 1.0} onChange={e=>{const a=[...stages]; a[idx]={...a[idx], curriculum:{...(s.curriculum||{}), end_frac: parseFloat(e.target.value)||1.0}}; setStages(a);}}/></label>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <button type="button" className="px-2 py-1 border rounded" onClick={()=>setStages([...stages, { name: `stage${stages.length+1}`, epochs: 1, learning_rate: lr, batch_size: batchSize }])}>Add Stage</button>
+                    <div className="text-xs text-text/70">Stages map to context schedule when Context Extension is enabled; otherwise they run sequentially.</div>
+                  </div>
+                </div>
               )}
+
+              <div className="border-t border-border pt-2">
+                <div className="text-sm font-semibold mb-1">Knowledge Distillation</div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                  <label className="inline-flex items-center gap-2"><input type="checkbox" checked={distill.enabled} onChange={e=>setDistill({...distill, enabled:e.target.checked})}/> Enable KD</label>
+                  <div className="md:col-span-2"><label className="text-xs">Teacher model (HF id or path)</label><input className="w-full border rounded px-2 py-1" value={distill.teacher_model} onChange={e=>setDistill({...distill, teacher_model:e.target.value})} placeholder="gpt2-medium"/></div>
+                  <div className="md:col-span-3"><label className="text-xs">Multi-teachers (comma‑separated)</label><input className="w-full border rounded px-2 py-1" value={distill.multi_teachers} onChange={e=>setDistill({...distill, multi_teachers:e.target.value})} placeholder="modelA, modelB"/></div>
+                  <label className="text-xs">Temperature<input type="number" step="0.1" className="w-full border rounded px-2 py-1" value={distill.temperature} onChange={e=>setDistill({...distill, temperature: parseFloat(e.target.value)||2.0})}/></label>
+                  <label className="text-xs">Alpha KD<input type="number" step="0.05" className="w-full border rounded px-2 py-1" value={distill.alpha_distill} onChange={e=>setDistill({...distill, alpha_distill: parseFloat(e.target.value)||0.5})}/></label>
+                  <label className="text-xs">Alpha CE<input type="number" step="0.05" className="w-full border rounded px-2 py-1" value={distill.alpha_ce} onChange={e=>setDistill({...distill, alpha_ce: parseFloat(e.target.value)||0.5})}/></label>
+                </div>
+              </div>
             </div>
           </details>
+        )}
+
+        {/* Precision & Distributed */}
+        {framework==='huggingface' && (
+          <details className="mt-2">
+            <summary className="cursor-pointer text-sm font-semibold">Precision & Distributed</summary>
+            <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-sm">Precision</label>
+                <select className="w-full border rounded px-3 py-2" value={precision} onChange={e=>setPrecision(e.target.value)}>
+                  <option value="">Default</option>
+                  <option value="fp16">FP16</option>
+                  <option value="bf16">BF16</option>
+                  <option value="fp8">FP8 (env support required)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-sm">Grad Clip</label>
+                <div className="grid grid-cols-2 gap-2 text-xs mt-1">
+                  <select className="w-full border rounded px-2 py-1" value={gradClip.type} onChange={e=>setGradClip({...gradClip, type:e.target.value})}>
+                    <option value="norm">By Norm</option>
+                    <option value="value">By Value</option>
+                  </select>
+                  {gradClip.type==='norm' ? (
+                    <input type="number" step="0.1" className="w-full border rounded px-2 py-1" value={gradClip.max_grad_norm} onChange={e=>setGradClip({...gradClip, max_grad_norm: parseFloat(e.target.value)||1.0})}/>
+                  ) : (
+                    <input type="number" step="0.1" className="w-full border rounded px-2 py-1" value={gradClip.max_value} onChange={e=>setGradClip({...gradClip, max_value: parseFloat(e.target.value)||1.0})}/>
+                  )}
+                </div>
+              </div>
+              <div>
+                <label className="text-sm">Grad Accumulation</label>
+                <input type="number" className="w-full border rounded px-3 py-2" value={gradAccum} onChange={e=>setGradAccum(parseInt(e.target.value)||1)}/>
+              </div>
+              <div className="md:col-span-3 border-t border-border pt-2">
+                <div className="text-sm font-semibold mb-1">Distributed</div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                  <div className="md:col-span-2"><label className="text-xs">DeepSpeed config path</label><input className="w-full border rounded px-2 py-1" value={dsPath} onChange={e=>setDsPath(e.target.value)} placeholder="training_scripts/deepspeed/zero2.json"/></div>
+                  <div className="flex items-end"><button type="button" className="px-2 py-1 border rounded" onClick={()=>setDsPath('training_scripts/deepspeed/zero2.json')}>Use ZeRO‑2 template</button></div>
+                  <div className="md:col-span-2"><label className="text-xs">FSDP config string</label><input className="w-full border rounded px-2 py-1" value={fsdp} onChange={e=>setFsdp(e.target.value)} placeholder="full_shard auto_wrap"/></div>
+                  <label className="inline-flex items-center gap-2"><input type="checkbox" checked={ddpFindUnused} onChange={e=>setDdpFindUnused(e.target.checked)}/> DDP find_unused_parameters</label>
+                  <label className="text-xs">FSDP min params<input type="number" className="w-full border rounded px-2 py-1" value={fsdpMinParams} onChange={e=>setFsdpMinParams(parseInt(e.target.value)||0)}/></label>
+                </div>
+                <div className="text-[11px] text-text/60 mt-1">Note: Multi‑node/multi‑GPU usually requires launching with torchrun externally.</div>
+              </div>
+            </div>
+          </details>
+        )}
+
+          {framework==='huggingface' && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-sm font-semibold">Context Window Extension</summary>
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={ctxEnabled} onChange={e=>setCtxEnabled(e.target.checked)}/> Enable Context Extension</label></div>
+              <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={preferCtxScript} onChange={e=>setPreferCtxScript(e.target.checked)} disabled={!ctxEnabled}/> Prefer context extension training path</label></div>
+                <div><label className="text-sm">Target Context Length</label><input type="number" min={2048} max={131072} className="w-full border rounded px-3 py-2" value={ctxTargetLen} onChange={e=>setCtxTargetLen(parseInt(e.target.value)||8192)} /></div>
+                <div><label className="text-sm">RoPE Scaling</label><select className="w-full border rounded px-3 py-2" value={ctxRopeMethod} onChange={e=>setCtxRopeMethod(e.target.value)}><option value="linear">Linear</option><option value="dynamic">Dynamic</option><option value="yarn">YaRN</option></select></div>
+                <div><label className="text-sm">Schedule</label><select className="w-full border rounded px-3 py-2" value={ctxSchedulePreset} onChange={e=>setCtxSchedulePreset(e.target.value)}><option value="4-8-16-32">4k→8k→16k→32k</option><option value="8-16-32-64">8k→16k→32k→64k</option><option value="custom">Custom</option></select></div>
+                {ctxSchedulePreset==='custom' && (<div className="md:col-span-2"><label className="text-sm">Custom schedule (comma‑sep tokens)</label><input className="w-full border rounded px-3 py-2" value={ctxCustomSchedule} onChange={e=>setCtxCustomSchedule(e.target.value)} placeholder="4096,8192,16384,32768"/></div>)}
+                <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={longloraEnabled} onChange={e=>setLongloraEnabled(e.target.checked)}/> Enable LongLoRA</label></div>
+                <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={longloraShifted} onChange={e=>setLongloraShifted(e.target.checked)}/> Shifted sparse attention</label></div>
+                <div className="md:col-span-3 border-t border-border pt-2">
+                  <div className="text-sm font-semibold mb-1">Long‑context Evaluation</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                    <label className="inline-flex items-center gap-2"><input type="checkbox" checked={evalPpl} onChange={e=>setEvalPpl(e.target.checked)}/> Perplexity</label>
+                    <label className="inline-flex items-center gap-2"><input type="checkbox" checked={evalNeedle} onChange={e=>setEvalNeedle(e.target.checked)}/> Needle‑in‑haystack</label>
+                    <label className="inline-flex items-center gap-2"><input type="checkbox" checked={evalLongQA} onChange={e=>setEvalLongQA(e.target.checked)}/> Long QA</label>
+                    <div className="md:col-span-2"><label className="text-xs">Eval lengths</label><input className="w-full border rounded px-2 py-1" value={evalLengths} onChange={e=>setEvalLengths(e.target.value)} placeholder="4096,8192,16384"/></div>
+                  </div>
+                </div>
+              </div>
+            </details>
+          )}
 
           <div className="flex justify-between">
             <button onClick={back} className="px-4 py-2 border rounded">Back</button>

@@ -912,7 +912,12 @@ def run_training_job(job_id):
         if job['type'] == 'train':
             script = os.path.join(script_path, f"train_{job['framework']}.py")
         else:
-            script = os.path.join(script_path, f"finetune_{job['framework']}.py")
+            # Prefer context extension script when enabled for HF
+            cfg = job.get('config') or {}
+            if job['framework'] == 'huggingface' and isinstance(cfg.get('context_extension'), dict) and cfg['context_extension'].get('enabled'):
+                script = os.path.join(script_path, 'context_extension_hf.py')
+            else:
+                script = os.path.join(script_path, f"finetune_{job['framework']}.py")
         
         # Build command
         cmd = [
