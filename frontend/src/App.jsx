@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import JobWizard from './components/JobWizard';
 import CommandPalette from './components/CommandPalette';
 import QuickStart from './components/QuickStart';
-import { Camera, Activity, Cpu, Database, Plus, List, Settings, Sun, Moon, Monitor, Zap, BarChart3 } from 'lucide-react';
+import { Activity, Cpu, Database, Plus, List, Settings, Sun, Moon, Monitor, LayoutDashboard, BarChart3, ChevronLeft, ChevronRight, User, Search } from 'lucide-react';
 import { ToastProvider, Button, Input, Modal, useToast, PageTransition } from './components/ui';
 import { ModelsPage, ModelDetail, ModelCompare } from './components/Models';
 import { DatasetsPage } from './components/Datasets';
@@ -53,6 +53,9 @@ api.uploadDataset = async (name, file, version) => {
   return res.json();
 };
 api.syncDatasets = (payload) => fetch(`${API_BASE}/datasets/sync`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r => r.json());
+// Adapters API
+api.listModelAdapters = (id) => fetch(`${API_BASE}/models/${id}/adapters`).then(r => r.json());
+api.mergeModelAdapter = (id, name) => fetch(`${API_BASE}/models/${id}/adapters/merge`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name })}).then(async r => { const t = await r.text(); try { return JSON.parse(t) } catch { return { error: t } } });
 
 // Dashboard Component
 const Dashboard = ({ onNavigate, systemInfo, partitions, metrics }) => {
@@ -1049,6 +1052,10 @@ export default function App() {
   const [widgetPrefs, setWidgetPrefs] = useState(() => {
     try { return JSON.parse(localStorage.getItem(widgetKey) || '{}'); } catch { return {}; }
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebar.collapsed') === '1'; } catch { return false; }
+  });
+  useEffect(()=>{ try { localStorage.setItem('sidebar.collapsed', sidebarCollapsed ? '1' : '0'); } catch {} }, [sidebarCollapsed]);
   useEffect(() => { try { localStorage.setItem(widgetKey, JSON.stringify(widgetPrefs)); } catch {} }, [widgetPrefs]);
   
   useEffect(() => {
@@ -1148,83 +1155,16 @@ export default function App() {
   
   return (
     <ToastProvider>
-    <div className="min-h-screen bg-bg">
-      <nav className="bg-surface shadow-md border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Database className="text-primary" size={32} />
-              <h1 className="text-2xl font-bold">DGX AI Trainer</h1>
-            </div>
-            <div className="flex gap-2 items-center">
-              <ThemeToggle />
-              <button
-                onClick={() => setCurrentPage('dashboard')}
-                className={`px-4 py-2 rounded-lg transition ${
-                  currentPage === 'dashboard'
-                    ? 'bg-primary text-on-primary'
-                    : 'hover:bg-muted'
-                }`}
-              >
-                Dashboard
-              </button>
-              <button
-                onClick={() => setCurrentPage('jobs')}
-                className={`px-4 py-2 rounded-lg transition ${
-                  currentPage === 'jobs'
-                    ? 'bg-primary text-on-primary'
-                    : 'hover:bg-muted'
-                }`}
-              >
-                Jobs
-              </button>
-              <button
-                onClick={() => setCurrentPage('models')}
-                className={`px-4 py-2 rounded-lg transition ${
-                  currentPage === 'models'
-                    ? 'bg-primary text-on-primary'
-                    : 'hover:bg-muted'
-                }`}
-              >
-                Models
-              </button>
-              <button
-                onClick={() => setCurrentPage('wizard')}
-                className={`px-4 py-2 rounded-lg transition ${
-                  currentPage === 'wizard'
-                    ? 'bg-primary text-on-primary'
-                    : 'hover:bg-muted'
-                }`}
-              >
-                New (Wizard)
-              </button>
-              <button
-                onClick={() => setCurrentPage('admin')}
-                className={`px-4 py-2 rounded-lg transition ${
-                  currentPage === 'admin'
-                    ? 'bg-primary text-on-primary'
-                    : 'hover:bg-muted'
-                }`}
-              >
-                Admin
-              </button>
-              <button
-                onClick={() => setCurrentPage('datasets')}
-                className={`px-4 py-2 rounded-lg transition ${
-                  currentPage === 'datasets'
-                    ? 'bg-primary text-on-primary'
-                    : 'hover:bg-muted'
-                }`}
-              >
-                Datasets
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
-      
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        <PageTransition>
+    <div className="min-h-screen bg-bg flex">
+      <Sidebar collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} current={currentPage} onNavigate={setCurrentPage} />
+      <div className="flex-1 flex flex-col min-w-0">
+        <HeaderBar breadcrumbs={<Breadcrumbs currentPage={currentPage} modelView={modelView} onNavigate={setCurrentPage} />} onSearch={()=>setPaletteOpen(true)}>
+          <ThemeToggle />
+          <UserMenu />
+        </HeaderBar>
+        <SecondaryNav currentPage={currentPage} onNavigate={setCurrentPage} />
+        <main className="max-w-7xl mx-auto px-4 py-6 w-full">
+          <PageTransition>
         {currentPage === 'dashboard' && (
           <Dashboard3Col
             onNavigate={setCurrentPage}
@@ -1273,13 +1213,44 @@ export default function App() {
             <AdminPartitions />
           </PageWithSidebars>
         )}
+        {currentPage === 'hardware_gpus' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <AdminPartitions />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'hardware_storage' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <HardwareStorage systemInfo={systemInfo} />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'hardware_network' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <HardwareNetwork systemInfo={systemInfo} />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'settings_profile' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <SettingsProfile />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'settings_teams' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <SettingsTeams />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'settings_billing' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <SettingsBilling />
+          </PageWithSidebars>
+        )}
         {currentPage === 'datasets' && (
           <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
             <DatasetsPage api={api} />
           </PageWithSidebars>
         )}
-        </PageTransition>
-      </main>
+          </PageTransition>
+        </main>
+      </div>
       <CommandPalette open={paletteOpen} onClose={()=>setPaletteOpen(false)} api={api} onNavigate={setCurrentPage} />
       <QuickStart open={quickStartOpen} onClose={()=>setQuickStartOpen(false)} api={api} onDone={()=>setCurrentPage('jobs')} />
     </div>
@@ -1820,6 +1791,72 @@ function Sparkline({ data=[], color="#2563eb", width=240, height=32, formatter }
   );
 }
 
+// Secondary pages
+function HardwareStorage({ systemInfo }){
+  return (
+    <div className="space-y-4">
+      <h1 className="text-3xl font-bold">Storage</h1>
+      <div className="bg-surface p-6 rounded-lg border border-border">
+        <div className="text-sm text-text/70 mb-2">Disks</div>
+        <div className="space-y-2">
+          {(systemInfo.disks || []).map((d, i) => (
+            <div key={i}>
+              <div className="flex justify-between text-xs text-text/70"><span>{d.path}</span><span>{d.used_gib} / {d.total_gib} GiB</span></div>
+              <div className="w-full bg-muted rounded h-2"><div className={`h-2 rounded ${ (d.used_pct||0) > 85 ? 'bg-red-500' : (d.used_pct||0) > 70 ? 'bg-yellow-500' : 'bg-green-500' }`} style={{ width: `${Math.min(100, Math.max(0, d.used_pct ?? 0))}%` }} /></div>
+            </div>
+          ))}
+          {(!systemInfo.disks || systemInfo.disks.length === 0) && (<div className="text-xs text-text/60">No disk info</div>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HardwareNetwork({ systemInfo }){
+  return (
+    <div className="space-y-4">
+      <h1 className="text-3xl font-bold">Network</h1>
+      <div className="bg-surface p-6 rounded-lg border border-border">
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <div className="text-text/70">Receive</div>
+            <div className="font-semibold">{formatRate(systemInfo.net?.rx_rate_bps || 0)}</div>
+          </div>
+          <div>
+            <div className="text-text/70">Transmit</div>
+            <div className="font-semibold">{formatRate(systemInfo.net?.tx_rate_bps || 0)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsProfile(){
+  return (
+    <div className="space-y-4">
+      <h1 className="text-3xl font-bold">Profile</h1>
+      <div className="bg-surface p-6 rounded-lg border border-border text-sm">Coming soon</div>
+    </div>
+  );
+}
+function SettingsTeams(){
+  return (
+    <div className="space-y-4">
+      <h1 className="text-3xl font-bold">Teams</h1>
+      <div className="bg-surface p-6 rounded-lg border border-border text-sm">Coming soon</div>
+    </div>
+  );
+}
+function SettingsBilling(){
+  return (
+    <div className="space-y-4">
+      <h1 className="text-3xl font-bold">Billing</h1>
+      <div className="bg-surface p-6 rounded-lg border border-border text-sm">Coming soon</div>
+    </div>
+  );
+}
+
 function AdminPartitions() {
   const [cfg, setCfg] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
@@ -1946,6 +1983,172 @@ function PageWithSidebars({ children, onNavigate, jobs, systemInfo }){
       <div className="col-span-12 lg:col-span-3 space-y-4">
         <ActivityNotifications jobs={jobs} systemInfo={systemInfo} />
       </div>
+    </div>
+  );
+}
+
+function SecondaryNav({ currentPage, onNavigate }){
+  const groups = [
+    { name: 'Training', items: [
+      { key: 'jobs', label: 'Jobs' },
+      { key: 'models', label: 'Models' },
+      { key: 'datasets', label: 'Datasets' },
+    ]},
+    { name: 'Hardware', items: [
+      { key: 'hardware_gpus', label: 'GPUs' },
+      { key: 'hardware_storage', label: 'Storage' },
+      { key: 'hardware_network', label: 'Network' },
+    ]},
+    { name: 'Settings', items: [
+      { key: 'settings_profile', label: 'Profile' },
+      { key: 'settings_teams', label: 'Teams' },
+      { key: 'settings_billing', label: 'Billing' },
+    ]},
+  ];
+  const isActive = (key) => currentPage === key;
+  return (
+    <div className="bg-surface border-b border-border">
+      <div className="max-w-7xl mx-auto px-4 py-2 flex flex-wrap gap-6">
+        {groups.map((g) => (
+          <div key={g.name} className="flex items-center gap-2 flex-wrap">
+            <div className="text-xs text-text/60 uppercase tracking-wide mr-1">{g.name}</div>
+            {g.items.map(it => (
+              <button key={it.key} onClick={()=>onNavigate(it.key)} className={`px-3 py-1 rounded text-sm border ${isActive(it.key)?'bg-primary text-on-primary border-primary':'border-border hover:bg-muted'}`}>{it.label}</button>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Persistent collapsible sidebar
+function Sidebar({ collapsed, setCollapsed, current, onNavigate }){
+  const items = [
+    { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+    { key: 'jobs', label: 'Jobs', icon: <Activity size={18} /> },
+    { key: 'models', label: 'Models', icon: <BarChart3 size={18} /> },
+    { key: 'datasets', label: 'Datasets', icon: <Database size={18} /> },
+    { key: 'wizard', label: 'Quick Start', icon: <List size={18} /> },
+    { key: 'admin', label: 'Admin', icon: <Settings size={18} /> },
+  ];
+  return (
+    <aside className={`${collapsed? 'w-16':'w-60'} bg-surface border-r border-border transition-all duration-200 flex flex-col`}>
+      <div className="h-14 flex items-center justify-between px-3 border-b border-border">
+        <div className={`font-bold ${collapsed?'text-center w-full':'truncate'}`}>{collapsed? 'DT' : 'DGX Trainer'}</div>
+        {!collapsed && (
+          <button className="p-1 rounded hover:bg-muted" onClick={()=>setCollapsed(true)} title="Collapse">
+            <ChevronLeft size={16} />
+          </button>
+        )}
+      </div>
+      <nav className="flex-1 py-3">
+        {items.map(it => (
+          <button key={it.key} onClick={()=>onNavigate(it.key)} className={`w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-muted ${current===it.key?'bg-muted font-semibold':'text-text'}`} title={collapsed ? it.label : undefined}>
+            <span className="shrink-0">{it.icon}</span>
+            {!collapsed && <span className="truncate">{it.label}</span>}
+          </button>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-border">
+        {collapsed ? (
+          <button className="w-full p-2 rounded hover:bg-muted" onClick={()=>setCollapsed(false)} title="Expand">
+            <ChevronRight size={16} />
+          </button>
+        ) : (
+          <button className="w-full px-3 py-2 rounded border border-border hover:bg-muted text-sm" onClick={()=>setCollapsed(true)}>Collapse</button>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+// Header with breadcrumbs and profile menu
+function HeaderBar({ breadcrumbs, onSearch, children }){
+  return (
+    <header className="h-14 bg-surface border-b border-border flex items-center justify-between px-4">
+      <div className="flex items-center gap-3 min-w-0">
+        <nav className="text-sm text-text/70 truncate">{breadcrumbs}</nav>
+      </div>
+      <div className="flex items-center gap-2">
+        <button className="px-2 py-1 rounded border border-border hover:bg-muted" onClick={onSearch} title="Search (Cmd/Ctrl+K)"><Search size={16} /></button>
+        {children}
+      </div>
+    </header>
+  );
+}
+
+function Breadcrumbs({ currentPage, modelView, onNavigate }){
+  const items = [{ key:'dashboard', label:'Dashboard' }];
+  const add = (key,label)=>items.push({ key,label });
+  if (currentPage !== 'dashboard') {
+    if (currentPage === 'models') {
+      add('models','Models');
+      if (modelView?.id) add('model-detail','Detail');
+      if (modelView?.compareIds?.length) add('model-compare','Compare');
+    } else if (currentPage === 'jobs') {
+      add('jobs','Jobs');
+    } else if (currentPage === 'create') {
+      add('jobs','Jobs'); add('create','New');
+    } else if (currentPage === 'wizard') {
+      add('wizard','Quick Start');
+    } else if (currentPage === 'datasets') {
+      add('datasets','Datasets');
+    } else if (currentPage === 'admin') {
+      add('admin','Admin');
+    } else if (currentPage === 'hardware_gpus') {
+      add('hardware','Hardware'); add('hardware_gpus','GPUs');
+    } else if (currentPage === 'hardware_storage') {
+      add('hardware','Hardware'); add('hardware_storage','Storage');
+    } else if (currentPage === 'hardware_network') {
+      add('hardware','Hardware'); add('hardware_network','Network');
+    } else if (currentPage === 'settings_profile') {
+      add('settings','Settings'); add('settings_profile','Profile');
+    } else if (currentPage === 'settings_teams') {
+      add('settings','Settings'); add('settings_teams','Teams');
+    } else if (currentPage === 'settings_billing') {
+      add('settings','Settings'); add('settings_billing','Billing');
+    }
+  }
+  const pageKeys = new Set(['dashboard','jobs','models','datasets','admin','wizard','create']);
+  return (
+    <ol className="flex items-center gap-2">
+      {items.map((it,i)=> (
+        <li key={i} className="flex items-center gap-2">
+          <button
+            onClick={()=> { if (i===items.length-1) return; const k = pageKeys.has(it.key) ? it.key : 'dashboard'; onNavigate(k); }}
+            className={`text-sm ${i===items.length-1? 'text-text font-semibold' : 'text-text/70 hover:text-text'} truncate`}
+          >
+            {it.label}
+          </button>
+          {i<items.length-1 && <span className="text-text/40">/</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function UserMenu(){
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(()=>{
+    const onDoc = (e)=>{ if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return ()=> document.removeEventListener('mousedown', onDoc);
+  },[]);
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={()=>setOpen(o=>!o)} className="px-2 py-1 rounded border border-border hover:bg-muted flex items-center gap-2">
+        <User size={16} />
+        <span className="hidden sm:inline text-sm">User</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-2 w-40 bg-surface border border-border rounded shadow-md text-sm z-10">
+          <button className="w-full text-left px-3 py-2 hover:bg-muted">Profile</button>
+          <button className="w-full text-left px-3 py-2 hover:bg-muted">Settings</button>
+          <button className="w-full text-left px-3 py-2 hover:bg-muted text-danger">Sign out</button>
+        </div>
+      )}
     </div>
   );
 }

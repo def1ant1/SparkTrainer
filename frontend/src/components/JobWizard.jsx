@@ -39,9 +39,12 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
   // Fine-tune specific
   const [hfModel, setHfModel] = useState('bert-base-uncased');
   const [freezeLayers, setFreezeLayers] = useState(false);
-  const [lora, setLora] = useState({ enabled: false, r: 8, alpha: 16, dropout: 0.05, qlora: false });
+  const [lora, setLora] = useState({ enabled: false, r: 8, alpha: 16, dropout: 0.05, qlora: false, target_modules: ['q_proj','v_proj'], merge_adapters: false, name: '', load_path: '' });
   const [adapters, setAdapters] = useState({ method: 'none' }); // none|prefix|ptuning
   const [quant, setQuant] = useState('none'); // none|int8|int4
+  const [fourbitType, setFourbitType] = useState('nf4'); // nf4|fp4
+  const [doubleQuant, setDoubleQuant] = useState(true);
+  const [computeDtype, setComputeDtype] = useState('bfloat16'); // bfloat16|float16|float32
   const [gradCheckpoint, setGradCheckpoint] = useState(false);
 
   // Architecture custom params (simple)
@@ -127,6 +130,11 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
       cfg.lora = lora;
       cfg.adapters = adapters;
       cfg.quantization = quant;
+      if (quant === 'int4' || lora.qlora) {
+        cfg.fourbit_quant_type = fourbitType;
+        cfg.double_quant = doubleQuant;
+        cfg.compute_dtype = computeDtype;
+      }
       cfg.gradient_checkpointing = gradCheckpoint;
     }
     if (framework === 'pytorch' && arch === 'custom') {
@@ -369,15 +377,44 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
               )}
               {framework==='huggingface' && (
                 <>
-                  <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={lora.enabled} onChange={e=>setLora({...lora, enabled: e.target.checked})}/> Enable LoRA</label></div>
-                  {lora.enabled && (
-                    <div className="md:col-span-2 grid grid-cols-3 gap-2">
-                      <label className="text-xs">r<input type="number" className="w-full border rounded px-2 py-1" value={lora.r} onChange={e=>setLora({...lora, r: parseInt(e.target.value)})}/></label>
-                      <label className="text-xs">alpha<input type="number" className="w-full border rounded px-2 py-1" value={lora.alpha} onChange={e=>setLora({...lora, alpha: parseInt(e.target.value)})}/></label>
-                      <label className="text-xs">dropout<input type="number" step="0.01" className="w-full border rounded px-2 py-1" value={lora.dropout} onChange={e=>setLora({...lora, dropout: parseFloat(e.target.value)})}/></label>
-                      <label className="inline-flex items-center gap-2 col-span-3"><input type="checkbox" checked={lora.qlora} onChange={e=>setLora({...lora, qlora: e.target.checked})}/> QLoRA</label>
+                  <div className="md:col-span-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="inline-flex items-center gap-2"><input type="checkbox" checked={lora.enabled} onChange={e=>setLora({...lora, enabled: e.target.checked})}/> Enable LoRA</label>
+                      <div className="flex gap-2 text-xs">
+                        <button type="button" className="px-2 py-1 border border-border rounded" onClick={()=>setLora(l=>({...l, enabled:true, r:8, alpha:16}))}>Quick LoRA</button>
+                        <button type="button" className="px-2 py-1 border border-border rounded" onClick={()=>setLora(l=>({...l, enabled:true, r:16, alpha:32}))}>Balanced</button>
+                        <button type="button" className="px-2 py-1 border border-border rounded" onClick={()=>setLora(l=>({...l, enabled:true, r:64, alpha:128}))}>Full</button>
+                      </div>
                     </div>
-                  )}
+                    {lora.enabled && (
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                        <div>
+                          <label className="text-xs">LoRA rank (r): {lora.r}</label>
+                          <input type="range" min="1" max="256" value={lora.r} onChange={e=>setLora({...lora, r: parseInt(e.target.value)})} className="w-full" />
+                        </div>
+                        <label className="text-xs">alpha<input type="number" className="w-full border rounded px-2 py-1" value={lora.alpha} onChange={e=>setLora({...lora, alpha: parseInt(e.target.value)})}/></label>
+                        <label className="text-xs">dropout<input type="number" step="0.01" className="w-full border rounded px-2 py-1" value={lora.dropout} onChange={e=>setLora({...lora, dropout: parseFloat(e.target.value)})}/></label>
+                        <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={lora.qlora} onChange={e=>setLora({...lora, qlora: e.target.checked})}/> QLoRA (4-bit)</label></div>
+                        <div className="md:col-span-4">
+                          <label className="text-xs block mb-1">Target Modules</label>
+                          <div className="flex flex-wrap gap-2 text-xs">
+                            {['q_proj','k_proj','v_proj','o_proj','gate_proj','up_proj','down_proj','lm_head'].map(m => (
+                              <label key={m} className={`px-2 py-1 rounded border cursor-pointer ${lora.target_modules?.includes(m)?'bg-primary/10 border-primary text-primary':'border-border'}`}>
+                                <input type="checkbox" className="hidden" checked={!!(lora.target_modules||[]).includes(m)} onChange={(e)=>{
+                                  setLora(l=> ({...l, target_modules: e.target.checked ? Array.from(new Set([...(l.target_modules||[]), m])) : (l.target_modules||[]).filter(x=>x!==m) }));
+                                }}/>
+                                {m}
+                              </label>
+                            ))}
+                          </div>
+                          <div className="text-[11px] text-text/60 mt-1">Tip: For LLaMA/LLM families use q_proj and v_proj; for GPT‑2 often q_proj,v_proj; for BERT tasks down_proj/up_proj sometimes apply depending on head. You can start with q_proj+v_proj (Quick LoRA) and iterate.</div>
+                        </div>
+                        <div className="md:col-span-2"><label className="text-xs">Adapter Name (for saving)</label><input className="w-full border rounded px-2 py-1" value={lora.name} onChange={e=>setLora({...lora, name: e.target.value})} placeholder="my-adapter"/></div>
+                        <div className="md:col-span-2"><label className="text-xs">Load Existing Adapter (server path)</label><input className="w-full border rounded px-2 py-1" value={lora.load_path} onChange={e=>setLora({...lora, load_path: e.target.value})} placeholder="./models/<id>/adapters/<name>"/></div>
+                        <div className="md:col-span-2 flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={lora.merge_adapters} onChange={e=>setLora({...lora, merge_adapters: e.target.checked})}/> Merge adapter into base model after training</label></div>
+                      </div>
+                    )}
+                  </div>
                   <div>
                     <label className="text-sm">Adapter Method</label>
                     <select className="w-full border rounded px-3 py-2" value={adapters.method} onChange={e=>setAdapters({method: e.target.value})}>
@@ -393,6 +430,24 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
                       <option value="int8">8-bit</option>
                       <option value="int4">4-bit</option>
                     </select>
+                    {(quant==='int4' || lora.qlora) && (
+                      <div className="grid grid-cols-1 gap-2 mt-2 text-xs">
+                        <label>4-bit type
+                          <select className="w-full border rounded px-2 py-1" value={fourbitType} onChange={e=>setFourbitType(e.target.value)}>
+                            <option value="nf4">NF4</option>
+                            <option value="fp4">FP4</option>
+                          </select>
+                        </label>
+                        <label className="inline-flex items-center gap-2"><input type="checkbox" checked={doubleQuant} onChange={e=>setDoubleQuant(e.target.checked)}/> Double quantization</label>
+                        <label>Compute dtype
+                          <select className="w-full border rounded px-2 py-1" value={computeDtype} onChange={e=>setComputeDtype(e.target.value)}>
+                            <option value="bfloat16">bfloat16</option>
+                            <option value="float16">float16</option>
+                            <option value="float32">float32</option>
+                          </select>
+                        </label>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={gradCheckpoint} onChange={e=>setGradCheckpoint(e.target.checked)}/> Gradient Checkpointing</label></div>
                 </>
