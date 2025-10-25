@@ -24,10 +24,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def load_pretrained_model(config):
     """Load a pre-trained model"""
-    
+
     model_source = config.get('model_source', 'torchvision')
     model_name = config.get('model_name', 'resnet18')
-    
+
     if model_source == 'torchvision':
         # Load from torchvision
         if model_name == 'resnet18':
@@ -40,34 +40,94 @@ def load_pretrained_model(config):
             model = models.densenet121(pretrained=True)
         else:
             model = models.resnet18(pretrained=True)
-        
+
         # Modify final layer for new task
         num_classes = config.get('num_classes', 10)
-        
+
         if 'resnet' in model_name or 'densenet' in model_name:
             num_features = model.fc.in_features
             model.fc = nn.Linear(num_features, num_classes)
         elif 'vgg' in model_name:
             num_features = model.classifier[6].in_features
             model.classifier[6] = nn.Linear(num_features, num_classes)
-    
+
+    elif model_source == 'model_id':
+        # Load from local models directory by ID
+        model_id = config.get('model_id')
+        if not model_id:
+            raise ValueError("model_id is required when model_source is 'model_id'")
+
+        models_dir = os.path.join(BASE_DIR, 'models')
+        model_dir = os.path.join(models_dir, model_id)
+
+        if not os.path.isdir(model_dir):
+            raise ValueError(f"Model directory not found: {model_dir}")
+
+        # Load model checkpoint
+        model_path = os.path.join(model_dir, 'model.pth')
+        if not os.path.exists(model_path):
+            raise ValueError(f"Model file not found: {model_path}")
+
+        checkpoint = torch.load(model_path, map_location='cpu')
+
+        # Load config from checkpoint or model directory
+        model_config = checkpoint.get('config', {})
+        if not model_config:
+            config_path = os.path.join(model_dir, 'config.json')
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    model_config = json.load(f)
+
+        # Rebuild model architecture
+        from train_pytorch import CustomModel, CustomResNet
+        architecture = model_config.get('architecture', 'custom')
+
+        if architecture == 'resnet':
+            model = CustomResNet(model_config)
+        else:
+            model = CustomModel(model_config)
+
+        # Load weights
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+        print(f"Loaded model from: {model_dir}")
+        print(f"Original architecture: {architecture}")
+
+        # Modify for new task if needed
+        num_classes = config.get('num_classes')
+        if num_classes and num_classes != model_config.get('output_size') and num_classes != model_config.get('num_classes'):
+            # Replace final layer for new number of classes
+            if architecture == 'resnet':
+                if hasattr(model, 'fc'):
+                    input_features = model.fc.in_features
+                    model.fc = nn.Linear(input_features, num_classes)
+                    print(f"Replaced final layer for {num_classes} classes")
+            else:
+                # CustomModel - replace last layer
+                input_features = list(model.network.children())[-1].in_features
+                model.network[-1] = nn.Linear(input_features, num_classes)
+                print(f"Replaced final layer for {num_classes} classes")
+
     elif model_source == 'custom':
-        # Load custom saved model
+        # Load custom saved model from explicit path
         model_path = config.get('model_path')
-        checkpoint = torch.load(model_path)
-        
+        if not model_path:
+            raise ValueError("model_path is required when model_source is 'custom'")
+
+        checkpoint = torch.load(model_path, map_location='cpu')
+
         # Rebuild model architecture (simplified)
         from train_pytorch import CustomModel
         model = CustomModel(checkpoint['config'])
         model.load_state_dict(checkpoint['model_state_dict'])
-        
+
         # Modify for new task if needed
         num_classes = config.get('num_classes')
         if num_classes:
             # Replace final layer
             input_features = list(model.network.children())[-1].in_features
             model.network[-1] = nn.Linear(input_features, num_classes)
-    
+
     return model
 
 def finetune_model(config, job_id):
@@ -335,17 +395,41 @@ def finetune_model(config, job_id):
         'config': config
     }, model_path)
     
-    # Save config
+    # Save config with complete architecture details
     config_path = os.path.join(save_dir, 'config.json')
+    saved_config = {
+        'name': config.get('name', f'Finetuned Model {job_id[:8]}'),
+        'framework': 'pytorch',
+        'base_model': config.get('model_name', 'custom'),
+        'model_source': config.get('model_source', 'torchvision'),
+        'created': datetime.now().isoformat(),
+        'parameters': sum(p.numel() for p in model.parameters()),
+        'best_val_loss': best_val_loss,
+        'num_classes': config.get('num_classes', 10),
+    }
+
+    # Save base model ID if loaded from model registry
+    if config.get('model_source') == 'model_id':
+        saved_config['base_model_id'] = config.get('model_id')
+
+    # For custom models, save architecture details for reconstruction
+    if config.get('model_source') in ('model_id', 'custom'):
+        # Try to infer architecture from model structure
+        if hasattr(model, 'fc'):
+            saved_config['architecture'] = 'resnet'
+        else:
+            saved_config['architecture'] = 'custom'
+
+        # Save model-specific details if available
+        if hasattr(model, 'network'):
+            saved_config['input_size'] = config.get('input_size', 784)
+            saved_config['output_size'] = config.get('num_classes', 10)
+            saved_config['hidden_layers'] = config.get('hidden_layers', [512, 256, 128])
+            saved_config['activation'] = config.get('activation', 'relu')
+            saved_config['dropout'] = config.get('dropout', 0.2)
+
     with open(config_path, 'w') as f:
-        json.dump({
-            'name': config.get('name', f'Finetuned Model {job_id[:8]}'),
-            'framework': 'pytorch',
-            'base_model': config.get('model_name', 'custom'),
-            'created': datetime.now().isoformat(),
-            'parameters': sum(p.numel() for p in model.parameters()),
-            'best_val_loss': best_val_loss
-        }, f, indent=2)
+        json.dump(saved_config, f, indent=2)
     
     print(f"\nModel saved to: {save_dir}")
     print(f"Best validation loss: {best_val_loss:.4f}")

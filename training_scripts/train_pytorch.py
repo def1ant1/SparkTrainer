@@ -287,16 +287,32 @@ def train_model(config, job_id):
         'config': config
     }, model_path)
     
-    # Save config
+    # Save config with complete architecture details
     config_path = os.path.join(save_dir, 'config.json')
+    saved_config = {
+        'name': config.get('name', f'Model {job_id[:8]}'),
+        'framework': 'pytorch',
+        'architecture': architecture,
+        'created': datetime.now().isoformat(),
+        'parameters': sum(p.numel() for p in model.parameters()),
+        # Save architecture-specific config for model reconstruction
+        'input_size': config.get('input_size', 784),
+        'output_size': config.get('output_size', 10),
+        'hidden_layers': config.get('hidden_layers', [512, 256, 128]),
+        'activation': config.get('activation', 'relu'),
+        'dropout': config.get('dropout', 0.2),
+    }
+
+    # Add ResNet-specific config if applicable
+    if architecture == 'resnet':
+        saved_config.update({
+            'num_classes': config.get('num_classes', 10),
+            'num_blocks': config.get('num_blocks', [2, 2, 2, 2]),
+            'channels': config.get('channels', [64, 128, 256, 512]),
+        })
+
     with open(config_path, 'w') as f:
-        json.dump({
-            'name': config.get('name', f'Model {job_id[:8]}'),
-            'framework': 'pytorch',
-            'architecture': architecture,
-            'created': datetime.now().isoformat(),
-            'parameters': sum(p.numel() for p in model.parameters())
-        }, f, indent=2)
+        json.dump(saved_config, f, indent=2)
     
     print(f"\nModel saved to: {save_dir}")
     print("Training completed successfully!")

@@ -110,8 +110,33 @@ def create_dummy_text_dataset(config):
 
 
 def build_model(config):
-    model_name = config.get('model_name', 'bert-base-uncased')
     task_type = config.get('task_type', 'classification')
+    model_source = config.get('model_source', 'huggingface')
+
+    # Determine model path/name
+    if model_source == 'model_id':
+        # Load from local models directory by ID
+        model_id = config.get('model_id')
+        if not model_id:
+            raise ValueError("model_id is required when model_source is 'model_id'")
+
+        models_dir = os.path.join(BASE_DIR, 'models')
+        model_dir = os.path.join(models_dir, model_id)
+
+        if not os.path.isdir(model_dir):
+            raise ValueError(f"Model directory not found: {model_dir}")
+
+        # Check if this is a HuggingFace model (should have config.json, pytorch_model.bin or model.safetensors)
+        hf_config_path = os.path.join(model_dir, 'config.json')
+        if not os.path.exists(hf_config_path):
+            raise ValueError(f"HuggingFace model config not found at: {hf_config_path}. "
+                           "Make sure the model was trained with HuggingFace framework.")
+
+        model_name = model_dir  # Use local path as model name
+        print(f"Loading model from local directory: {model_dir}")
+    else:
+        # Load from HuggingFace Hub
+        model_name = config.get('model_name', 'bert-base-uncased')
 
     quant = (config.get('quantization') or '').lower()
     lora_cfg = config.get('lora') or {}
@@ -601,21 +626,27 @@ def finetune_hf(config, job_id):
         model.save_pretrained(output_dir)
         tokenizer.save_pretrained(output_dir)
 
-    # Persist job config snapshot
-    with open(os.path.join(output_dir, 'config.json'), 'w') as f:
-        json.dump({
-            'name': config.get('name', f'HF Finetuned {job_id[:8]}'),
-            'framework': 'huggingface',
-            'base_model': config.get('model_name'),
-            'task_type': config.get('task_type', 'classification'),
-            'created': datetime.now().isoformat(),
-            'lora': lora_cfg,
-            'quantization': config.get('quantization'),
-            'stages': config.get('stages'),
-            'distillation': config.get('distillation'),
-            'distributed': config.get('distributed'),
-            'precision': config.get('precision') or config.get('compute_dtype'),
-        }, f, indent=2)
+    # Persist job config snapshot to metadata.json (don't overwrite HuggingFace's config.json)
+    metadata = {
+        'name': config.get('name', f'HF Finetuned {job_id[:8]}'),
+        'framework': 'huggingface',
+        'base_model': config.get('model_name'),
+        'task_type': config.get('task_type', 'classification'),
+        'created': datetime.now().isoformat(),
+        'lora': lora_cfg,
+        'quantization': config.get('quantization'),
+        'stages': config.get('stages'),
+        'distillation': config.get('distillation'),
+        'distributed': config.get('distributed'),
+        'precision': config.get('precision') or config.get('compute_dtype'),
+    }
+
+    # Save base model ID if loaded from model registry
+    if config.get('model_source') == 'model_id':
+        metadata['base_model_id'] = config.get('model_id')
+
+    with open(os.path.join(output_dir, 'metadata.json'), 'w') as f:
+        json.dump(metadata, f, indent=2)
 
     # Finish tracking
     try:
