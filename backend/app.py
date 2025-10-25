@@ -1165,10 +1165,150 @@ def job_checkpoint_save(job_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def _validate_job_config(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate job configuration before creating a training job.
+
+    Returns a dict with 'valid' (bool) and 'errors' (list of error messages).
+    """
+    errors = []
+    config = data.get('config', {})
+    job_type = data.get('type', 'train')
+    framework = data.get('framework', 'pytorch')
+
+    # Validate framework
+    valid_frameworks = ['pytorch', 'tensorflow', 'huggingface']
+    if framework not in valid_frameworks:
+        errors.append(f"Invalid framework '{framework}'. Must be one of: {', '.join(valid_frameworks)}")
+
+    # Validate job type
+    valid_types = ['train', 'finetune']
+    if job_type not in valid_types:
+        errors.append(f"Invalid job type '{job_type}'. Must be one of: {', '.join(valid_types)}")
+
+    # Validate basic numeric parameters
+    if 'epochs' in config:
+        try:
+            epochs = int(config['epochs'])
+            if epochs <= 0:
+                errors.append("epochs must be greater than 0")
+        except (ValueError, TypeError):
+            errors.append("epochs must be a valid integer")
+
+    if 'batch_size' in config:
+        try:
+            batch_size = int(config['batch_size'])
+            if batch_size <= 0:
+                errors.append("batch_size must be greater than 0")
+        except (ValueError, TypeError):
+            errors.append("batch_size must be a valid integer")
+
+    if 'learning_rate' in config:
+        try:
+            lr = float(config['learning_rate'])
+            if lr <= 0:
+                errors.append("learning_rate must be greater than 0")
+        except (ValueError, TypeError):
+            errors.append("learning_rate must be a valid number")
+
+    # Validate model configuration for fine-tuning
+    if job_type == 'finetune':
+        model_source = config.get('model_source', 'torchvision' if framework == 'pytorch' else 'huggingface')
+
+        if model_source == 'model_id':
+            # Validate that model_id exists
+            model_id = config.get('model_id')
+            if not model_id:
+                errors.append("model_id is required when model_source is 'model_id'")
+            else:
+                model_dir = os.path.join(MODELS_DIR, str(model_id))
+                if not os.path.isdir(model_dir):
+                    errors.append(f"Model with ID '{model_id}' not found in models directory")
+                else:
+                    # Validate model files exist
+                    if framework == 'pytorch':
+                        model_file = os.path.join(model_dir, 'model.pth')
+                        if not os.path.exists(model_file):
+                            errors.append(f"Model file 'model.pth' not found for model '{model_id}'")
+
+                        # Validate config exists for reconstruction
+                        config_file = os.path.join(model_dir, 'config.json')
+                        if not os.path.exists(config_file):
+                            errors.append(f"Model config file 'config.json' not found for model '{model_id}'")
+                        else:
+                            # Try to load and validate architecture info
+                            try:
+                                with open(config_file, 'r') as f:
+                                    model_config = json.load(f)
+                                    if 'architecture' not in model_config:
+                                        errors.append(f"Model '{model_id}' is missing architecture information")
+                            except Exception as e:
+                                errors.append(f"Failed to read model config: {str(e)}")
+
+                    elif framework == 'huggingface':
+                        hf_config_file = os.path.join(model_dir, 'config.json')
+                        if not os.path.exists(hf_config_file):
+                            errors.append(f"HuggingFace model config not found for model '{model_id}'. "
+                                        "Make sure the model was trained with HuggingFace framework.")
+
+        elif model_source == 'custom':
+            # Validate that model_path is provided and exists
+            model_path = config.get('model_path')
+            if not model_path:
+                errors.append("model_path is required when model_source is 'custom'")
+            elif not os.path.exists(model_path):
+                errors.append(f"Model file not found at: {model_path}")
+
+        elif model_source == 'torchvision':
+            # Validate model_name is valid
+            valid_models = ['resnet18', 'resnet50', 'vgg16', 'densenet121']
+            model_name = config.get('model_name')
+            if model_name and model_name not in valid_models:
+                errors.append(f"Invalid torchvision model '{model_name}'. Must be one of: {', '.join(valid_models)}")
+
+    # Validate architecture for train-from-scratch
+    if job_type == 'train' and framework == 'pytorch':
+        architecture = config.get('architecture', 'custom')
+        if architecture == 'custom':
+            # Validate CustomModel parameters
+            if 'input_size' not in config:
+                errors.append("input_size is required for custom architecture")
+            if 'output_size' not in config:
+                errors.append("output_size is required for custom architecture")
+        elif architecture == 'resnet':
+            # Validate CustomResNet parameters
+            if 'num_classes' not in config:
+                errors.append("num_classes is required for resnet architecture")
+
+    # Validate data configuration
+    data_config = config.get('data', {})
+    if data_config:
+        source = data_config.get('source', 'local')
+        if source == 'local':
+            local_path = data_config.get('local_path')
+            if local_path and not os.path.exists(local_path):
+                errors.append(f"Local data path not found: {local_path}")
+
+    return {'valid': len(errors) == 0, 'errors': errors}
+
+@app.route('/api/jobs/validate', methods=['POST'])
+def validate_job():
+    """Validate job configuration without creating a job"""
+    data = request.json
+    validation = _validate_job_config(data)
+    return jsonify(validation), 200
+
 @app.route('/api/jobs', methods=['POST'])
 def create_job():
     """Create a new training job"""
     data = request.json
+
+    # Validate job configuration
+    validation = _validate_job_config(data)
+    if not validation['valid']:
+        return jsonify({
+            'error': 'Job configuration validation failed',
+            'validation_errors': validation['errors']
+        }), 400
     
     job_id = str(uuid.uuid4())
     

@@ -185,10 +185,10 @@ def train_transformer(config, job_id):
     print(f"\nSaving model to: {output_dir}")
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
-    
-    # Save config
-    config_path = os.path.join(output_dir, 'config.json')
-    with open(config_path, 'w') as f:
+
+    # Save metadata (don't overwrite HuggingFace's config.json)
+    metadata_path = os.path.join(output_dir, 'metadata.json')
+    with open(metadata_path, 'w') as f:
         json.dump({
             'name': config.get('name', f'Transformer Model {job_id[:8]}'),
             'framework': 'huggingface',
