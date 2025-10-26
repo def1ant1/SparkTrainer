@@ -4,11 +4,11 @@ import os
 import json
 import subprocess
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import signal
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from collections import deque
 import zipfile
 import io
@@ -17,6 +17,7 @@ import shutil
 import hashlib
 import csv
 import random
+import secrets
 try:
     from PIL import Image
 except Exception:
@@ -66,6 +67,13 @@ _scheduler_started = False
 
 PIPELINES_PATH = os.path.join(JOBS_DIR, 'pipelines.json')
 SCHEDULES_PATH = os.path.join(JOBS_DIR, 'schedules.json')
+USERS_PATH = os.path.join(JOBS_DIR, 'users.json')
+TEAMS_PATH = os.path.join(JOBS_DIR, 'teams.json')
+BILLING_PATH = os.path.join(JOBS_DIR, 'billing.json')
+
+# Simple in-memory session storage (replace with Redis/database in production)
+_sessions: Dict[str, Dict[str, Any]] = {}
+_api_tokens: Dict[str, str] = {}  # token -> user_id mapping
 
 def _load_json(path: str, default: Any):
     if os.path.exists(path):
@@ -175,6 +183,227 @@ def experiments_star(exp_id):
     exps[exp_id] = e
     _save_experiments(exps)
     return jsonify({'status': 'ok', 'favorite': e['favorite']})
+
+@app.route('/api/experiments/<exp_id>', methods=['DELETE'])
+def delete_experiment(exp_id):
+    """Delete an experiment"""
+    exps = _load_experiments()
+    if exp_id not in exps:
+        return jsonify({'error': 'Not found'}), 404
+    del exps[exp_id]
+    _save_experiments(exps)
+    return jsonify({'status': 'ok', 'deleted': exp_id})
+
+@app.route('/api/experiments/<exp_id>/jobs', methods=['GET'])
+def experiment_jobs(exp_id):
+    """Get all jobs associated with an experiment"""
+    exps = _load_experiments()
+    if exp_id not in exps:
+        return jsonify({'error': 'Not found'}), 404
+
+    # Filter jobs by experiment ID
+    exp_jobs = [
+        j for j in jobs.values()
+        if isinstance(j.get('experiment'), dict) and j['experiment'].get('id') == exp_id
+    ]
+
+    # Sort by created date (newest first)
+    exp_jobs.sort(key=lambda x: x.get('created', ''), reverse=True)
+
+    return jsonify({'jobs': exp_jobs, 'count': len(exp_jobs)})
+
+@app.route('/api/experiments/<exp_id>/metrics', methods=['GET'])
+def experiment_metrics(exp_id):
+    """Get aggregated metrics for all jobs in an experiment"""
+    exps = _load_experiments()
+    if exp_id not in exps:
+        return jsonify({'error': 'Not found'}), 404
+
+    # Get all jobs for this experiment
+    exp_jobs = [
+        j for j in jobs.values()
+        if isinstance(j.get('experiment'), dict) and j['experiment'].get('id') == exp_id
+    ]
+
+    # Aggregate metrics
+    metrics = {
+        'total_jobs': len(exp_jobs),
+        'completed': sum(1 for j in exp_jobs if j.get('status') == 'completed'),
+        'running': sum(1 for j in exp_jobs if j.get('status') == 'running'),
+        'failed': sum(1 for j in exp_jobs if j.get('status') == 'failed'),
+        'pending': sum(1 for j in exp_jobs if j.get('status') == 'pending'),
+        'best_metrics': {},
+        'job_metrics': []
+    }
+
+    # Collect individual job metrics
+    for job in exp_jobs:
+        job_id = job.get('id')
+        job_metrics = {
+            'job_id': job_id,
+            'name': job.get('name'),
+            'status': job.get('status'),
+            'created': job.get('created'),
+            'metrics': {}
+        }
+
+        # Try to load metrics from job output directory
+        if job_id:
+            model_dir = os.path.join(MODELS_DIR, job_id)
+            config_path = os.path.join(model_dir, 'config.json')
+            metadata_path = os.path.join(model_dir, 'metadata.json')
+
+            # Try config.json first (PyTorch custom models)
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                        if 'best_val_loss' in config:
+                            job_metrics['metrics']['val_loss'] = config['best_val_loss']
+                        if 'best_val_accuracy' in config:
+                            job_metrics['metrics']['val_accuracy'] = config['best_val_accuracy']
+                except Exception:
+                    pass
+
+            # Try metadata.json (HuggingFace models)
+            if os.path.exists(metadata_path):
+                try:
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                        if 'best_val_loss' in metadata:
+                            job_metrics['metrics']['val_loss'] = metadata['best_val_loss']
+                        if 'best_val_accuracy' in metadata:
+                            job_metrics['metrics']['val_accuracy'] = metadata['best_val_accuracy']
+                        if 'eval_results' in metadata:
+                            job_metrics['metrics'].update(metadata['eval_results'])
+                except Exception:
+                    pass
+
+        if job_metrics['metrics']:
+            metrics['job_metrics'].append(job_metrics)
+
+            # Track best metrics across all jobs
+            for metric_name, metric_value in job_metrics['metrics'].items():
+                if isinstance(metric_value, (int, float)):
+                    if metric_name not in metrics['best_metrics']:
+                        metrics['best_metrics'][metric_name] = {
+                            'value': metric_value,
+                            'job_id': job_id,
+                            'job_name': job.get('name')
+                        }
+                    else:
+                        # For loss metrics, lower is better; for accuracy/f1/etc, higher is better
+                        is_loss_metric = 'loss' in metric_name.lower()
+                        current_best = metrics['best_metrics'][metric_name]['value']
+                        if (is_loss_metric and metric_value < current_best) or \
+                           (not is_loss_metric and metric_value > current_best):
+                            metrics['best_metrics'][metric_name] = {
+                                'value': metric_value,
+                                'job_id': job_id,
+                                'job_name': job.get('name')
+                            }
+
+    return jsonify(metrics)
+
+@app.route('/api/experiments/compare', methods=['POST'])
+def compare_experiments():
+    """Compare metrics across multiple experiments"""
+    data = request.json or {}
+    exp_ids = data.get('experiment_ids', [])
+
+    if not exp_ids or not isinstance(exp_ids, list):
+        return jsonify({'error': 'experiment_ids array required'}), 400
+
+    exps = _load_experiments()
+    comparison = {
+        'experiments': [],
+        'metrics_comparison': {}
+    }
+
+    for exp_id in exp_ids:
+        if exp_id not in exps:
+            continue
+
+        exp = exps[exp_id]
+
+        # Get jobs for this experiment
+        exp_jobs = [
+            j for j in jobs.values()
+            if isinstance(j.get('experiment'), dict) and j['experiment'].get('id') == exp_id
+        ]
+
+        exp_data = {
+            'id': exp_id,
+            'name': exp.get('name'),
+            'description': exp.get('description'),
+            'total_jobs': len(exp_jobs),
+            'completed_jobs': sum(1 for j in exp_jobs if j.get('status') == 'completed'),
+            'metrics': {}
+        }
+
+        # Collect metrics from all jobs
+        all_metrics = {}
+        for job in exp_jobs:
+            job_id = job.get('id')
+            if not job_id:
+                continue
+
+            model_dir = os.path.join(MODELS_DIR, job_id)
+            config_path = os.path.join(model_dir, 'config.json')
+            metadata_path = os.path.join(model_dir, 'metadata.json')
+
+            for path in [config_path, metadata_path]:
+                if os.path.exists(path):
+                    try:
+                        with open(path, 'r') as f:
+                            data_dict = json.load(f)
+                            for key in ['best_val_loss', 'best_val_accuracy', 'eval_results']:
+                                if key in data_dict:
+                                    if key == 'eval_results' and isinstance(data_dict[key], dict):
+                                        for metric_name, value in data_dict[key].items():
+                                            if isinstance(value, (int, float)):
+                                                if metric_name not in all_metrics:
+                                                    all_metrics[metric_name] = []
+                                                all_metrics[metric_name].append(value)
+                                    elif isinstance(data_dict[key], (int, float)):
+                                        metric_name = key.replace('best_', '')
+                                        if metric_name not in all_metrics:
+                                            all_metrics[metric_name] = []
+                                        all_metrics[metric_name].append(data_dict[key])
+                    except Exception:
+                        pass
+
+        # Calculate aggregate metrics
+        for metric_name, values in all_metrics.items():
+            if values:
+                exp_data['metrics'][metric_name] = {
+                    'mean': sum(values) / len(values),
+                    'min': min(values),
+                    'max': max(values),
+                    'count': len(values)
+                }
+
+        comparison['experiments'].append(exp_data)
+
+    # Build cross-experiment metric comparison
+    all_metric_names = set()
+    for exp in comparison['experiments']:
+        all_metric_names.update(exp['metrics'].keys())
+
+    for metric_name in all_metric_names:
+        comparison['metrics_comparison'][metric_name] = {
+            'experiments': {}
+        }
+        for exp in comparison['experiments']:
+            if metric_name in exp['metrics']:
+                comparison['metrics_comparison'][metric_name]['experiments'][exp['id']] = {
+                    'name': exp['name'],
+                    'mean': exp['metrics'][metric_name]['mean'],
+                    'min': exp['metrics'][metric_name]['min'],
+                    'max': exp['metrics'][metric_name]['max']
+                }
+
+    return jsonify(comparison)
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -1165,151 +1394,11 @@ def job_checkpoint_save(job_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def _validate_job_config(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate job configuration before creating a training job.
-
-    Returns a dict with 'valid' (bool) and 'errors' (list of error messages).
-    """
-    errors = []
-    config = data.get('config', {})
-    job_type = data.get('type', 'train')
-    framework = data.get('framework', 'pytorch')
-
-    # Validate framework
-    valid_frameworks = ['pytorch', 'tensorflow', 'huggingface']
-    if framework not in valid_frameworks:
-        errors.append(f"Invalid framework '{framework}'. Must be one of: {', '.join(valid_frameworks)}")
-
-    # Validate job type
-    valid_types = ['train', 'finetune']
-    if job_type not in valid_types:
-        errors.append(f"Invalid job type '{job_type}'. Must be one of: {', '.join(valid_types)}")
-
-    # Validate basic numeric parameters
-    if 'epochs' in config:
-        try:
-            epochs = int(config['epochs'])
-            if epochs <= 0:
-                errors.append("epochs must be greater than 0")
-        except (ValueError, TypeError):
-            errors.append("epochs must be a valid integer")
-
-    if 'batch_size' in config:
-        try:
-            batch_size = int(config['batch_size'])
-            if batch_size <= 0:
-                errors.append("batch_size must be greater than 0")
-        except (ValueError, TypeError):
-            errors.append("batch_size must be a valid integer")
-
-    if 'learning_rate' in config:
-        try:
-            lr = float(config['learning_rate'])
-            if lr <= 0:
-                errors.append("learning_rate must be greater than 0")
-        except (ValueError, TypeError):
-            errors.append("learning_rate must be a valid number")
-
-    # Validate model configuration for fine-tuning
-    if job_type == 'finetune':
-        model_source = config.get('model_source', 'torchvision' if framework == 'pytorch' else 'huggingface')
-
-        if model_source == 'model_id':
-            # Validate that model_id exists
-            model_id = config.get('model_id')
-            if not model_id:
-                errors.append("model_id is required when model_source is 'model_id'")
-            else:
-                model_dir = os.path.join(MODELS_DIR, str(model_id))
-                if not os.path.isdir(model_dir):
-                    errors.append(f"Model with ID '{model_id}' not found in models directory")
-                else:
-                    # Validate model files exist
-                    if framework == 'pytorch':
-                        model_file = os.path.join(model_dir, 'model.pth')
-                        if not os.path.exists(model_file):
-                            errors.append(f"Model file 'model.pth' not found for model '{model_id}'")
-
-                        # Validate config exists for reconstruction
-                        config_file = os.path.join(model_dir, 'config.json')
-                        if not os.path.exists(config_file):
-                            errors.append(f"Model config file 'config.json' not found for model '{model_id}'")
-                        else:
-                            # Try to load and validate architecture info
-                            try:
-                                with open(config_file, 'r') as f:
-                                    model_config = json.load(f)
-                                    if 'architecture' not in model_config:
-                                        errors.append(f"Model '{model_id}' is missing architecture information")
-                            except Exception as e:
-                                errors.append(f"Failed to read model config: {str(e)}")
-
-                    elif framework == 'huggingface':
-                        hf_config_file = os.path.join(model_dir, 'config.json')
-                        if not os.path.exists(hf_config_file):
-                            errors.append(f"HuggingFace model config not found for model '{model_id}'. "
-                                        "Make sure the model was trained with HuggingFace framework.")
-
-        elif model_source == 'custom':
-            # Validate that model_path is provided and exists
-            model_path = config.get('model_path')
-            if not model_path:
-                errors.append("model_path is required when model_source is 'custom'")
-            elif not os.path.exists(model_path):
-                errors.append(f"Model file not found at: {model_path}")
-
-        elif model_source == 'torchvision':
-            # Validate model_name is valid
-            valid_models = ['resnet18', 'resnet50', 'vgg16', 'densenet121']
-            model_name = config.get('model_name')
-            if model_name and model_name not in valid_models:
-                errors.append(f"Invalid torchvision model '{model_name}'. Must be one of: {', '.join(valid_models)}")
-
-    # Validate architecture for train-from-scratch
-    if job_type == 'train' and framework == 'pytorch':
-        architecture = config.get('architecture', 'custom')
-        if architecture == 'custom':
-            # Validate CustomModel parameters
-            if 'input_size' not in config:
-                errors.append("input_size is required for custom architecture")
-            if 'output_size' not in config:
-                errors.append("output_size is required for custom architecture")
-        elif architecture == 'resnet':
-            # Validate CustomResNet parameters
-            if 'num_classes' not in config:
-                errors.append("num_classes is required for resnet architecture")
-
-    # Validate data configuration
-    data_config = config.get('data', {})
-    if data_config:
-        source = data_config.get('source', 'local')
-        if source == 'local':
-            local_path = data_config.get('local_path')
-            if local_path and not os.path.exists(local_path):
-                errors.append(f"Local data path not found: {local_path}")
-
-    return {'valid': len(errors) == 0, 'errors': errors}
-
-@app.route('/api/jobs/validate', methods=['POST'])
-def validate_job():
-    """Validate job configuration without creating a job"""
-    data = request.json
-    validation = _validate_job_config(data)
-    return jsonify(validation), 200
-
 @app.route('/api/jobs', methods=['POST'])
 def create_job():
     """Create a new training job"""
     data = request.json
 
-    # Validate job configuration
-    validation = _validate_job_config(data)
-    if not validation['valid']:
-        return jsonify({
-            'error': 'Job configuration validation failed',
-            'validation_errors': validation['errors']
-        }), 400
-    
     job_id = str(uuid.uuid4())
     
     gpu_sel = data.get('gpu') or None
@@ -2687,7 +2776,8 @@ def dataset_annotations_export_yolo(name):
                 cls = class_to_id.get(b.get('label'), 0)
                 lines.append(f"{cls} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
             rel = it['path']
-            lbl_path = f"labels/{os.path.splitext(rel.replace('\\\\','/').replace('\\','/'))[0]}.txt"
+            normalized_path = rel.replace('\\\\', '/').replace('\\', '/')
+            lbl_path = f"labels/{os.path.splitext(normalized_path)[0]}.txt"
             z.writestr(lbl_path, ('\n'.join(lines)+'\n').encode('utf-8'))
     mem.seek(0)
     return send_file(mem, mimetype='application/zip', as_attachment=True, download_name=f"{name}_{version or 'latest'}_yolo.zip")
@@ -3038,35 +3128,410 @@ def pipelines_root():
     return jsonify({'items': _load_json(PIPELINES_PATH, [])})
 
 
+@app.route('/api/pipelines/<pid>', methods=['GET', 'PUT', 'DELETE'])
+def pipeline_detail(pid):
+    """Get, update, or delete a specific pipeline"""
+    pipes = _load_json(PIPELINES_PATH, [])
+    pipe_idx = next((i for i, p in enumerate(pipes) if p.get('id') == pid), None)
+
+    if pipe_idx is None:
+        return jsonify({'error': 'Pipeline not found'}), 404
+
+    if request.method == 'DELETE':
+        pipes.pop(pipe_idx)
+        _save_json(PIPELINES_PATH, pipes)
+        return jsonify({'status': 'ok', 'deleted': pid})
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        # Preserve ID and created timestamp
+        data['id'] = pid
+        data['created'] = pipes[pipe_idx].get('created', datetime.now().isoformat())
+        data['updated'] = datetime.now().isoformat()
+        pipes[pipe_idx] = data
+        _save_json(PIPELINES_PATH, pipes)
+        return jsonify(data)
+
+    # GET
+    return jsonify(pipes[pipe_idx])
+
 @app.route('/api/pipelines/<pid>/run', methods=['POST'])
-def pipelines_run(pid):
+@app.route('/api/pipelines/<pid>/execute', methods=['POST'])
+def pipelines_execute(pid):
+    """Execute a pipeline (creates jobs for all nodes)"""
     pipes = _load_json(PIPELINES_PATH, [])
     pipe = next((p for p in pipes if p.get('id') == pid), None)
     if not pipe:
         return jsonify({'error': 'Pipeline not found'}), 404
+
     nodes = pipe.get('nodes') or []
     edges = pipe.get('edges') or []
-    # compute dependencies map
+
+    # Compute dependencies map
     deps = { n.get('id'): [] for n in nodes }
     for e in edges:
         deps.setdefault(e.get('to'), []).append(e.get('from'))
+
+    # Store execution metadata
+    execution_id = str(uuid.uuid4())
+    execution_start = datetime.now().isoformat()
+
     id_map = {}
+    errors = []
+
     for n in nodes:
+        node_id = n.get('id')
         payload = (n.get('job') or {}).copy()
-        # map deps to created job ids after creation
-        depends_on_nodes = deps.get(n.get('id')) or []
+
+        # Map dependencies to created job IDs
+        depends_on_nodes = deps.get(node_id) or []
         dep_ids = [id_map[d] for d in depends_on_nodes if d in id_map]
         if dep_ids:
             payload['depends_on'] = dep_ids
+
+        # Tag job with pipeline and execution info
+        if 'metadata' not in payload:
+            payload['metadata'] = {}
+        payload['metadata']['pipeline_id'] = pid
+        payload['metadata']['pipeline_name'] = pipe.get('name', 'Unnamed Pipeline')
+        payload['metadata']['execution_id'] = execution_id
+        payload['metadata']['node_id'] = node_id
+        payload['metadata']['node_name'] = n.get('name', 'Unnamed Node')
+
         try:
             with app.test_request_context(json=payload):
                 resp, code = create_job()
                 if code == 201:
                     job_obj = resp.get_json()
-                    id_map[n.get('id')] = job_obj.get('id')
-        except Exception:
+                    id_map[node_id] = job_obj.get('id')
+                else:
+                    errors.append({'node_id': node_id, 'error': 'Failed to create job'})
+        except Exception as e:
+            errors.append({'node_id': node_id, 'error': str(e)})
             continue
-    return jsonify({'status': 'ok', 'jobs': id_map})
+
+    # Save execution record
+    if not hasattr(pipe, 'executions'):
+        pipe['executions'] = []
+
+    execution_record = {
+        'id': execution_id,
+        'started': execution_start,
+        'node_jobs': id_map,
+        'errors': errors,
+        'status': 'running' if id_map else 'failed'
+    }
+
+    # Update pipeline with execution record
+    for i, p in enumerate(pipes):
+        if p.get('id') == pid:
+            if 'executions' not in p:
+                p['executions'] = []
+            p['executions'].append(execution_record)
+            pipes[i] = p
+            break
+
+    _save_json(PIPELINES_PATH, pipes)
+
+    return jsonify({
+        'status': 'ok',
+        'execution_id': execution_id,
+        'jobs': id_map,
+        'errors': errors
+    })
+
+@app.route('/api/pipelines/<pid>/status', methods=['GET'])
+def pipeline_status(pid):
+    """Get execution status of a pipeline"""
+    pipes = _load_json(PIPELINES_PATH, [])
+    pipe = next((p for p in pipes if p.get('id') == pid), None)
+
+    if not pipe:
+        return jsonify({'error': 'Pipeline not found'}), 404
+
+    executions = pipe.get('executions', [])
+
+    # Get latest execution or all executions
+    execution_id = request.args.get('execution_id')
+
+    if execution_id:
+        execution = next((e for e in executions if e.get('id') == execution_id), None)
+        if not execution:
+            return jsonify({'error': 'Execution not found'}), 404
+        executions_to_check = [execution]
+    else:
+        # Return status of latest execution
+        executions_to_check = [executions[-1]] if executions else []
+
+    result = []
+    for execution in executions_to_check:
+        node_jobs = execution.get('node_jobs', {})
+        job_statuses = {}
+
+        for node_id, job_id in node_jobs.items():
+            if job_id in jobs:
+                job = jobs[job_id]
+                job_statuses[node_id] = {
+                    'job_id': job_id,
+                    'status': job.get('status'),
+                    'progress': job.get('progress', 0),
+                    'name': job.get('name')
+                }
+            else:
+                job_statuses[node_id] = {
+                    'job_id': job_id,
+                    'status': 'unknown',
+                    'progress': 0
+                }
+
+        # Determine overall execution status
+        statuses = [js['status'] for js in job_statuses.values()]
+        if all(s == 'completed' for s in statuses):
+            overall_status = 'completed'
+        elif any(s == 'failed' for s in statuses):
+            overall_status = 'failed'
+        elif any(s == 'running' for s in statuses):
+            overall_status = 'running'
+        elif all(s == 'pending' for s in statuses):
+            overall_status = 'pending'
+        else:
+            overall_status = 'partial'
+
+        result.append({
+            'execution_id': execution.get('id'),
+            'started': execution.get('started'),
+            'status': overall_status,
+            'nodes': job_statuses,
+            'errors': execution.get('errors', [])
+        })
+
+    if execution_id:
+        return jsonify(result[0] if result else {})
+    else:
+        return jsonify({
+            'pipeline_id': pid,
+            'latest_execution': result[0] if result else None,
+            'total_executions': len(executions)
+        })
+
+@app.route('/api/pipelines/<pid>/stages/<stage_id>/retry', methods=['POST'])
+def pipeline_stage_retry(pid, stage_id):
+    """Retry a failed stage in a pipeline"""
+    pipes = _load_json(PIPELINES_PATH, [])
+    pipe = next((p for p in pipes if p.get('id') == pid), None)
+
+    if not pipe:
+        return jsonify({'error': 'Pipeline not found'}), 404
+
+    # Get the execution ID from request
+    data = request.json or {}
+    execution_id = data.get('execution_id')
+
+    if not execution_id:
+        return jsonify({'error': 'execution_id required'}), 400
+
+    executions = pipe.get('executions', [])
+    execution = next((e for e in executions if e.get('id') == execution_id), None)
+
+    if not execution:
+        return jsonify({'error': 'Execution not found'}), 404
+
+    # Find the node/stage in the pipeline
+    nodes = pipe.get('nodes', [])
+    node = next((n for n in nodes if n.get('id') == stage_id), None)
+
+    if not node:
+        return jsonify({'error': 'Stage not found'}), 404
+
+    # Get the original job ID for this stage
+    node_jobs = execution.get('node_jobs', {})
+    original_job_id = node_jobs.get(stage_id)
+
+    if not original_job_id:
+        return jsonify({'error': 'No job found for this stage'}), 404
+
+    # Create a new job with the same configuration
+    payload = (node.get('job') or {}).copy()
+
+    # Tag with retry metadata
+    if 'metadata' not in payload:
+        payload['metadata'] = {}
+    payload['metadata']['pipeline_id'] = pid
+    payload['metadata']['execution_id'] = execution_id
+    payload['metadata']['node_id'] = stage_id
+    payload['metadata']['retry_of'] = original_job_id
+
+    try:
+        with app.test_request_context(json=payload):
+            resp, code = create_job()
+            if code == 201:
+                job_obj = resp.get_json()
+                new_job_id = job_obj.get('id')
+
+                # Update the execution record
+                for i, p in enumerate(pipes):
+                    if p.get('id') == pid:
+                        for j, e in enumerate(p.get('executions', [])):
+                            if e.get('id') == execution_id:
+                                if 'retries' not in e:
+                                    e['retries'] = []
+                                e['retries'].append({
+                                    'stage_id': stage_id,
+                                    'original_job_id': original_job_id,
+                                    'retry_job_id': new_job_id,
+                                    'timestamp': datetime.now().isoformat()
+                                })
+                                # Update the node_jobs mapping to point to new job
+                                e['node_jobs'][stage_id] = new_job_id
+                                pipes[i]['executions'][j] = e
+                                break
+                        break
+
+                _save_json(PIPELINES_PATH, pipes)
+
+                return jsonify({
+                    'status': 'ok',
+                    'original_job_id': original_job_id,
+                    'retry_job_id': new_job_id
+                })
+            else:
+                return jsonify({'error': 'Failed to create retry job'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/pipelines/templates', methods=['GET'])
+def pipeline_templates():
+    """Get predefined pipeline templates"""
+    templates = [
+        {
+            'id': 'simple-train-eval',
+            'name': 'Simple Train & Evaluate',
+            'description': 'Train a model and evaluate it on a test set',
+            'nodes': [
+                {
+                    'id': 'train',
+                    'name': 'Train Model',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 100},
+                    'job': {
+                        'name': 'Training Job',
+                        'type': 'train',
+                        'framework': 'pytorch'
+                    }
+                },
+                {
+                    'id': 'eval',
+                    'name': 'Evaluate Model',
+                    'type': 'evaluate',
+                    'position': {'x': 400, 'y': 100},
+                    'job': {
+                        'name': 'Evaluation Job',
+                        'type': 'finetune',
+                        'framework': 'pytorch'
+                    }
+                }
+            ],
+            'edges': [
+                {'from': 'train', 'to': 'eval'}
+            ]
+        },
+        {
+            'id': 'data-prep-train',
+            'name': 'Data Prep → Train',
+            'description': 'Prepare dataset then train a model',
+            'nodes': [
+                {
+                    'id': 'prep',
+                    'name': 'Data Preparation',
+                    'type': 'preprocess',
+                    'position': {'x': 100, 'y': 100}
+                },
+                {
+                    'id': 'train',
+                    'name': 'Train Model',
+                    'type': 'train',
+                    'position': {'x': 400, 'y': 100}
+                }
+            ],
+            'edges': [
+                {'from': 'prep', 'to': 'train'}
+            ]
+        },
+        {
+            'id': 'hyperparameter-sweep',
+            'name': 'Hyperparameter Sweep',
+            'description': 'Train multiple models with different hyperparameters',
+            'nodes': [
+                {
+                    'id': 'train-lr1',
+                    'name': 'Train (LR=0.001)',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 50}
+                },
+                {
+                    'id': 'train-lr2',
+                    'name': 'Train (LR=0.01)',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 150}
+                },
+                {
+                    'id': 'train-lr3',
+                    'name': 'Train (LR=0.1)',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 250}
+                },
+                {
+                    'id': 'compare',
+                    'name': 'Compare Results',
+                    'type': 'evaluate',
+                    'position': {'x': 400, 'y': 150}
+                }
+            ],
+            'edges': [
+                {'from': 'train-lr1', 'to': 'compare'},
+                {'from': 'train-lr2', 'to': 'compare'},
+                {'from': 'train-lr3', 'to': 'compare'}
+            ]
+        },
+        {
+            'id': 'ensemble',
+            'name': 'Model Ensemble',
+            'description': 'Train multiple models and ensemble them',
+            'nodes': [
+                {
+                    'id': 'model1',
+                    'name': 'Model 1 (ResNet)',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 50}
+                },
+                {
+                    'id': 'model2',
+                    'name': 'Model 2 (VGG)',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 150}
+                },
+                {
+                    'id': 'model3',
+                    'name': 'Model 3 (DenseNet)',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 250}
+                },
+                {
+                    'id': 'ensemble',
+                    'name': 'Ensemble',
+                    'type': 'evaluate',
+                    'position': {'x': 400, 'y': 150}
+                }
+            ],
+            'edges': [
+                {'from': 'model1', 'to': 'ensemble'},
+                {'from': 'model2', 'to': 'ensemble'},
+                {'from': 'model3', 'to': 'ensemble'}
+            ]
+        }
+    ]
+
+    return jsonify({'templates': templates})
 
 
 @app.route('/api/schedules', methods=['GET','POST'])
@@ -3080,6 +3545,752 @@ def schedules_root():
         _save_json(SCHEDULES_PATH, scheds)
         return jsonify({'status': 'ok', 'id': data['id']}), 201
     return jsonify({'items': _load_json(SCHEDULES_PATH, [])})
+
+
+# ---------------- Auth & Users ----------------
+
+def _hash_password(password: str) -> str:
+    """Simple password hashing (use bcrypt/argon2 in production)"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def _generate_token() -> str:
+    """Generate a secure random token"""
+    return secrets.token_urlsafe(32)
+
+def _get_current_user() -> Optional[Dict[str, Any]]:
+    """Get current user from session or API token"""
+    # Check for API token in Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        token = auth_header[7:]
+        user_id = _api_tokens.get(token)
+        if user_id:
+            users = _load_json(USERS_PATH, {})
+            return users.get(user_id)
+
+    # Check for session token
+    session_token = request.headers.get('X-Session-Token') or request.cookies.get('session_token')
+    if session_token and session_token in _sessions:
+        session = _sessions[session_token]
+        if datetime.fromisoformat(session['expires']) > datetime.now():
+            users = _load_json(USERS_PATH, {})
+            return users.get(session['user_id'])
+        else:
+            # Session expired
+            del _sessions[session_token]
+
+    return None
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    """Register a new user"""
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password', '')
+    name = (data.get('name') or '').strip()
+
+    if not email or not password:
+        return jsonify({'error': 'Email and password required'}), 400
+
+    if len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+
+    users = _load_json(USERS_PATH, {})
+
+    # Check if email already exists
+    if any(u.get('email') == email for u in users.values()):
+        return jsonify({'error': 'Email already registered'}), 400
+
+    user_id = str(uuid.uuid4())
+    user = {
+        'id': user_id,
+        'email': email,
+        'name': name or email.split('@')[0],
+        'password_hash': _hash_password(password),
+        'created': datetime.now().isoformat(),
+        'role': 'user',  # 'user', 'admin'
+        'avatar': None,
+        'preferences': {
+            'theme': 'dark',
+            'notifications': {'email': True, 'web': True}
+        },
+        'teams': []
+    }
+
+    users[user_id] = user
+    _save_json(USERS_PATH, users)
+
+    # Don't return password hash
+    user_response = {k: v for k, v in user.items() if k != 'password_hash'}
+
+    return jsonify(user_response), 201
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    """Login user and create session"""
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password', '')
+
+    if not email or not password:
+        return jsonify({'error': 'Email and password required'}), 400
+
+    users = _load_json(USERS_PATH, {})
+    user = next((u for u in users.values() if u.get('email') == email), None)
+
+    if not user or user.get('password_hash') != _hash_password(password):
+        return jsonify({'error': 'Invalid email or password'}), 401
+
+    # Create session
+    session_token = _generate_token()
+    _sessions[session_token] = {
+        'user_id': user['id'],
+        'created': datetime.now().isoformat(),
+        'expires': (datetime.now() + timedelta(days=7)).isoformat()
+    }
+
+    user_response = {k: v for k, v in user.items() if k != 'password_hash'}
+
+    return jsonify({
+        'user': user_response,
+        'session_token': session_token,
+        'expires': _sessions[session_token]['expires']
+    })
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    """Logout user and destroy session"""
+    session_token = request.headers.get('X-Session-Token') or request.cookies.get('session_token')
+
+    if session_token and session_token in _sessions:
+        del _sessions[session_token]
+
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/user/profile', methods=['GET', 'PUT'])
+def user_profile():
+    """Get or update user profile"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        users = _load_json(USERS_PATH, {})
+
+        # Update allowed fields
+        for field in ['name', 'avatar', 'preferences']:
+            if field in data:
+                users[user['id']][field] = data[field]
+
+        users[user['id']]['updated'] = datetime.now().isoformat()
+        _save_json(USERS_PATH, users)
+
+        user = users[user['id']]
+
+    user_response = {k: v for k, v in user.items() if k != 'password_hash'}
+    return jsonify(user_response)
+
+@app.route('/api/user/avatar', methods=['POST'])
+def user_avatar():
+    """Upload user avatar"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    # In production, handle actual file upload
+    # For now, accept base64 data URL
+    data = request.json or {}
+    avatar_data = data.get('avatar')
+
+    users = _load_json(USERS_PATH, {})
+    users[user['id']]['avatar'] = avatar_data
+    users[user['id']]['updated'] = datetime.now().isoformat()
+    _save_json(USERS_PATH, users)
+
+    return jsonify({'status': 'ok', 'avatar': avatar_data})
+
+@app.route('/api/user/tokens', methods=['GET', 'POST'])
+def user_tokens():
+    """Manage API tokens"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    users = _load_json(USERS_PATH, {})
+
+    if request.method == 'POST':
+        # Create new API token
+        token = _generate_token()
+        _api_tokens[token] = user['id']
+
+        if 'api_tokens' not in users[user['id']]:
+            users[user['id']]['api_tokens'] = []
+
+        token_record = {
+            'id': str(uuid.uuid4()),
+            'token': token,
+            'created': datetime.now().isoformat(),
+            'name': (request.json or {}).get('name', 'API Token')
+        }
+
+        users[user['id']]['api_tokens'].append(token_record)
+        _save_json(USERS_PATH, users)
+
+        return jsonify(token_record), 201
+
+    # GET - list tokens (without showing full token)
+    tokens = users[user['id']].get('api_tokens', [])
+    tokens_response = [
+        {
+            'id': t['id'],
+            'name': t['name'],
+            'created': t['created'],
+            'token_preview': t['token'][:8] + '...' if 'token' in t else None
+        }
+        for t in tokens
+    ]
+
+    return jsonify({'tokens': tokens_response})
+
+@app.route('/api/user/tokens/<token_id>', methods=['DELETE'])
+def delete_user_token(token_id):
+    """Delete an API token"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    users = _load_json(USERS_PATH, {})
+    tokens = users[user['id']].get('api_tokens', [])
+
+    token_to_delete = next((t for t in tokens if t['id'] == token_id), None)
+    if not token_to_delete:
+        return jsonify({'error': 'Token not found'}), 404
+
+    # Remove from memory
+    if token_to_delete.get('token') in _api_tokens:
+        del _api_tokens[token_to_delete['token']]
+
+    # Remove from user record
+    users[user['id']]['api_tokens'] = [t for t in tokens if t['id'] != token_id]
+    _save_json(USERS_PATH, users)
+
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/user/preferences', methods=['GET', 'PUT'])
+def user_preferences():
+    """Get or update user preferences"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    users = _load_json(USERS_PATH, {})
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        users[user['id']]['preferences'] = data
+        users[user['id']]['updated'] = datetime.now().isoformat()
+        _save_json(USERS_PATH, users)
+
+    return jsonify(users[user['id']].get('preferences', {}))
+
+
+# ---------------- Teams ----------------
+
+@app.route('/api/teams', methods=['GET', 'POST'])
+def teams_root():
+    """List or create teams"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    teams = _load_json(TEAMS_PATH, {})
+
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+
+        if not name:
+            return jsonify({'error': 'Team name required'}), 400
+
+        team_id = str(uuid.uuid4())
+        team = {
+            'id': team_id,
+            'name': name,
+            'description': data.get('description', ''),
+            'created': datetime.now().isoformat(),
+            'owner_id': user['id'],
+            'members': [
+                {
+                    'user_id': user['id'],
+                    'role': 'owner',  # 'owner', 'admin', 'member'
+                    'joined': datetime.now().isoformat()
+                }
+            ],
+            'quota': {
+                'max_gpus': data.get('max_gpus', 4),
+                'max_storage_gb': data.get('max_storage_gb', 1000),
+                'max_jobs_per_month': data.get('max_jobs_per_month', 100)
+            },
+            'usage': {
+                'current_gpus': 0,
+                'storage_gb': 0,
+                'jobs_this_month': 0
+            }
+        }
+
+        teams[team_id] = team
+        _save_json(TEAMS_PATH, teams)
+
+        # Add team to user
+        users = _load_json(USERS_PATH, {})
+        if 'teams' not in users[user['id']]:
+            users[user['id']]['teams'] = []
+        users[user['id']]['teams'].append(team_id)
+        _save_json(USERS_PATH, users)
+
+        return jsonify(team), 201
+
+    # GET - list teams where user is a member
+    user_teams = [
+        t for t in teams.values()
+        if any(m['user_id'] == user['id'] for m in t.get('members', []))
+    ]
+
+    return jsonify({'teams': user_teams})
+
+@app.route('/api/teams/<team_id>', methods=['GET', 'PUT', 'DELETE'])
+def team_detail(team_id):
+    """Get, update, or delete a team"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    teams = _load_json(TEAMS_PATH, {})
+
+    if team_id not in teams:
+        return jsonify({'error': 'Team not found'}), 404
+
+    team = teams[team_id]
+
+    # Check if user is a member
+    is_member = any(m['user_id'] == user['id'] for m in team.get('members', []))
+    is_owner = team.get('owner_id') == user['id']
+
+    if not is_member:
+        return jsonify({'error': 'Not a team member'}), 403
+
+    if request.method == 'DELETE':
+        if not is_owner:
+            return jsonify({'error': 'Only owner can delete team'}), 403
+
+        del teams[team_id]
+        _save_json(TEAMS_PATH, teams)
+
+        # Remove from all users
+        users = _load_json(USERS_PATH, {})
+        for user_data in users.values():
+            if 'teams' in user_data and team_id in user_data['teams']:
+                user_data['teams'].remove(team_id)
+        _save_json(USERS_PATH, users)
+
+        return jsonify({'status': 'ok', 'deleted': team_id})
+
+    if request.method == 'PUT':
+        if not is_owner:
+            return jsonify({'error': 'Only owner can update team'}), 403
+
+        data = request.json or {}
+        for field in ['name', 'description', 'quota']:
+            if field in data:
+                team[field] = data[field]
+
+        team['updated'] = datetime.now().isoformat()
+        teams[team_id] = team
+        _save_json(TEAMS_PATH, teams)
+
+    return jsonify(team)
+
+@app.route('/api/teams/<team_id>/members', methods=['POST'])
+def team_add_member(team_id):
+    """Add a member to a team"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    teams = _load_json(TEAMS_PATH, {})
+
+    if team_id not in teams:
+        return jsonify({'error': 'Team not found'}), 404
+
+    team = teams[team_id]
+
+    # Check if user is owner or admin
+    user_member = next((m for m in team.get('members', []) if m['user_id'] == user['id']), None)
+    if not user_member or user_member['role'] not in ['owner', 'admin']:
+        return jsonify({'error': 'Insufficient permissions'}), 403
+
+    data = request.json or {}
+    new_user_email = (data.get('email') or '').strip().lower()
+    role = data.get('role', 'member')
+
+    if not new_user_email:
+        return jsonify({'error': 'User email required'}), 400
+
+    # Find user by email
+    users = _load_json(USERS_PATH, {})
+    new_user = next((u for u in users.values() if u.get('email') == new_user_email), None)
+
+    if not new_user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Check if already a member
+    if any(m['user_id'] == new_user['id'] for m in team.get('members', [])):
+        return jsonify({'error': 'User already a member'}), 400
+
+    member = {
+        'user_id': new_user['id'],
+        'role': role,
+        'joined': datetime.now().isoformat()
+    }
+
+    team['members'].append(member)
+    teams[team_id] = team
+    _save_json(TEAMS_PATH, teams)
+
+    # Add team to user
+    if 'teams' not in users[new_user['id']]:
+        users[new_user['id']]['teams'] = []
+    users[new_user['id']]['teams'].append(team_id)
+    _save_json(USERS_PATH, users)
+
+    return jsonify(member), 201
+
+@app.route('/api/teams/<team_id>/members/<member_user_id>', methods=['DELETE'])
+def team_remove_member(team_id, member_user_id):
+    """Remove a member from a team"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    teams = _load_json(TEAMS_PATH, {})
+
+    if team_id not in teams:
+        return jsonify({'error': 'Team not found'}), 404
+
+    team = teams[team_id]
+
+    # Owner can't be removed
+    if member_user_id == team.get('owner_id'):
+        return jsonify({'error': 'Cannot remove team owner'}), 400
+
+    # Check permissions
+    user_member = next((m for m in team.get('members', []) if m['user_id'] == user['id']), None)
+    if not user_member:
+        return jsonify({'error': 'Not a team member'}), 403
+
+    # Users can remove themselves, or admins/owners can remove others
+    if member_user_id != user['id'] and user_member['role'] not in ['owner', 'admin']:
+        return jsonify({'error': 'Insufficient permissions'}), 403
+
+    # Remove member
+    team['members'] = [m for m in team.get('members', []) if m['user_id'] != member_user_id]
+    teams[team_id] = team
+    _save_json(TEAMS_PATH, teams)
+
+    # Remove team from user
+    users = _load_json(USERS_PATH, {})
+    if member_user_id in users and 'teams' in users[member_user_id]:
+        users[member_user_id]['teams'] = [t for t in users[member_user_id]['teams'] if t != team_id]
+        _save_json(USERS_PATH, users)
+
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/teams/<team_id>/members/<member_user_id>/role', methods=['PUT'])
+def team_update_member_role(team_id, member_user_id):
+    """Update a member's role"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    teams = _load_json(TEAMS_PATH, {})
+
+    if team_id not in teams:
+        return jsonify({'error': 'Team not found'}), 404
+
+    team = teams[team_id]
+
+    # Only owner can change roles
+    if team.get('owner_id') != user['id']:
+        return jsonify({'error': 'Only owner can change member roles'}), 403
+
+    # Can't change owner's role
+    if member_user_id == team.get('owner_id'):
+        return jsonify({'error': 'Cannot change owner role'}), 400
+
+    data = request.json or {}
+    new_role = data.get('role', 'member')
+
+    if new_role not in ['admin', 'member']:
+        return jsonify({'error': 'Invalid role'}), 400
+
+    # Update role
+    for member in team.get('members', []):
+        if member['user_id'] == member_user_id:
+            member['role'] = new_role
+            break
+    else:
+        return jsonify({'error': 'Member not found'}), 404
+
+    teams[team_id] = team
+    _save_json(TEAMS_PATH, teams)
+
+    return jsonify({'status': 'ok', 'role': new_role})
+
+@app.route('/api/teams/<team_id>/quota', methods=['GET', 'PUT'])
+def team_quota(team_id):
+    """Get or update team quota"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    teams = _load_json(TEAMS_PATH, {})
+
+    if team_id not in teams:
+        return jsonify({'error': 'Team not found'}), 404
+
+    team = teams[team_id]
+
+    # Check if user is a member
+    is_member = any(m['user_id'] == user['id'] for m in team.get('members', []))
+    if not is_member:
+        return jsonify({'error': 'Not a team member'}), 403
+
+    if request.method == 'PUT':
+        # Only owner can update quota
+        if team.get('owner_id') != user['id']:
+            return jsonify({'error': 'Only owner can update quota'}), 403
+
+        data = request.json or {}
+        team['quota'] = data
+        teams[team_id] = team
+        _save_json(TEAMS_PATH, teams)
+
+    return jsonify({
+        'quota': team.get('quota', {}),
+        'usage': team.get('usage', {})
+    })
+
+
+# ---------------- Billing ----------------
+
+def _track_job_cost(job_id: str):
+    """Track cost for a completed job"""
+    if job_id not in jobs:
+        return
+
+    job = jobs[job_id]
+
+    # Simple cost calculation (customize based on your pricing)
+    gpu_type = job.get('gpu', 'unknown')
+    duration_seconds = 0
+
+    if job.get('started') and job.get('completed'):
+        try:
+            started = datetime.fromisoformat(job['started'])
+            completed = datetime.fromisoformat(job['completed'])
+            duration_seconds = (completed - started).total_seconds()
+        except Exception:
+            pass
+
+    # Example pricing ($/hour)
+    gpu_pricing = {
+        'A100': 3.00,
+        'V100': 2.00,
+        'T4': 0.50,
+        'unknown': 1.00
+    }
+
+    hourly_rate = gpu_pricing.get(gpu_type, 1.00)
+    cost = (duration_seconds / 3600) * hourly_rate
+
+    billing = _load_json(BILLING_PATH, {'records': []})
+
+    record = {
+        'id': str(uuid.uuid4()),
+        'job_id': job_id,
+        'user_id': job.get('user_id', 'unknown'),
+        'team_id': job.get('team_id'),
+        'timestamp': datetime.now().isoformat(),
+        'gpu_type': gpu_type,
+        'duration_seconds': duration_seconds,
+        'cost': round(cost, 4),
+        'description': f"Job: {job.get('name', job_id)}"
+    }
+
+    billing['records'].append(record)
+    _save_json(BILLING_PATH, billing)
+
+@app.route('/api/billing/usage', methods=['GET'])
+def billing_usage():
+    """Get billing usage summary"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    billing = _load_json(BILLING_PATH, {'records': []})
+
+    # Filter by user
+    user_records = [r for r in billing['records'] if r.get('user_id') == user['id']]
+
+    # Calculate totals
+    total_cost = sum(r.get('cost', 0) for r in user_records)
+    total_hours = sum(r.get('duration_seconds', 0) for r in user_records) / 3600
+
+    # Group by month
+    monthly_usage = {}
+    for record in user_records:
+        try:
+            month_key = datetime.fromisoformat(record['timestamp']).strftime('%Y-%m')
+            if month_key not in monthly_usage:
+                monthly_usage[month_key] = {'cost': 0, 'hours': 0, 'jobs': 0}
+            monthly_usage[month_key]['cost'] += record.get('cost', 0)
+            monthly_usage[month_key]['hours'] += record.get('duration_seconds', 0) / 3600
+            monthly_usage[month_key]['jobs'] += 1
+        except Exception:
+            pass
+
+    return jsonify({
+        'total_cost': round(total_cost, 2),
+        'total_hours': round(total_hours, 2),
+        'total_jobs': len(user_records),
+        'monthly_usage': monthly_usage,
+        'current_month': datetime.now().strftime('%Y-%m')
+    })
+
+@app.route('/api/billing/breakdown', methods=['GET'])
+def billing_breakdown():
+    """Get detailed billing breakdown"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    billing = _load_json(BILLING_PATH, {'records': []})
+
+    # Filter by user
+    user_records = [r for r in billing['records'] if r.get('user_id') == user['id']]
+
+    # Group by GPU type
+    by_gpu = {}
+    for record in user_records:
+        gpu = record.get('gpu_type', 'unknown')
+        if gpu not in by_gpu:
+            by_gpu[gpu] = {'cost': 0, 'hours': 0, 'jobs': 0}
+        by_gpu[gpu]['cost'] += record.get('cost', 0)
+        by_gpu[gpu]['hours'] += record.get('duration_seconds', 0) / 3600
+        by_gpu[gpu]['jobs'] += 1
+
+    # Get recent records (last 30 days)
+    thirty_days_ago = datetime.now() - timedelta(days=30)
+    recent_records = [
+        r for r in user_records
+        if datetime.fromisoformat(r['timestamp']) > thirty_days_ago
+    ]
+
+    return jsonify({
+        'by_gpu_type': by_gpu,
+        'recent_records': recent_records[-100:],  # Last 100 records
+        'total_records': len(user_records)
+    })
+
+@app.route('/api/billing/invoices', methods=['GET'])
+def billing_invoices():
+    """Get invoices"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    # Generate monthly invoices from billing records
+    billing = _load_json(BILLING_PATH, {'records': []})
+    user_records = [r for r in billing['records'] if r.get('user_id') == user['id']]
+
+    invoices = {}
+    for record in user_records:
+        try:
+            month_key = datetime.fromisoformat(record['timestamp']).strftime('%Y-%m')
+            if month_key not in invoices:
+                invoices[month_key] = {
+                    'id': f"INV-{month_key}",
+                    'month': month_key,
+                    'total': 0,
+                    'items': 0,
+                    'status': 'paid'
+                }
+            invoices[month_key]['total'] += record.get('cost', 0)
+            invoices[month_key]['items'] += 1
+        except Exception:
+            pass
+
+    invoice_list = sorted(invoices.values(), key=lambda x: x['month'], reverse=True)
+
+    return jsonify({'invoices': invoice_list})
+
+@app.route('/api/billing/invoices/<invoice_id>', methods=['GET'])
+def billing_invoice_detail(invoice_id):
+    """Get invoice details"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    # Extract month from invoice ID (format: INV-YYYY-MM)
+    if not invoice_id.startswith('INV-'):
+        return jsonify({'error': 'Invalid invoice ID'}), 400
+
+    month_key = invoice_id[4:]  # Remove 'INV-' prefix
+
+    billing = _load_json(BILLING_PATH, {'records': []})
+    user_records = [
+        r for r in billing['records']
+        if r.get('user_id') == user['id'] and
+        datetime.fromisoformat(r['timestamp']).strftime('%Y-%m') == month_key
+    ]
+
+    if not user_records:
+        return jsonify({'error': 'Invoice not found'}), 404
+
+    total = sum(r.get('cost', 0) for r in user_records)
+
+    return jsonify({
+        'id': invoice_id,
+        'month': month_key,
+        'total': round(total, 2),
+        'records': user_records,
+        'status': 'paid'
+    })
+
+@app.route('/api/billing/alerts', methods=['POST'])
+def billing_alerts():
+    """Set billing alerts"""
+    user = _get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.json or {}
+
+    # Store alert preferences in user preferences
+    users = _load_json(USERS_PATH, {})
+    if 'preferences' not in users[user['id']]:
+        users[user['id']]['preferences'] = {}
+
+    users[user['id']]['preferences']['billing_alerts'] = {
+        'monthly_limit': data.get('monthly_limit'),
+        'daily_limit': data.get('daily_limit'),
+        'enabled': data.get('enabled', True)
+    }
+
+    _save_json(USERS_PATH, users)
+
+    return jsonify({'status': 'ok', 'alerts': users[user['id']]['preferences']['billing_alerts']})
 
 
 def _detect_partitions() -> Dict[str, Any]:
@@ -3505,6 +4716,61 @@ def _validate_job_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             v = cfg.get(k)
             if v is None or not isinstance(v, (int, float)) or v <= 0:
                 errors.append(f'{k} must be a positive number')
+
+    # Model source validation for fine-tuning
+    if jtype == 'finetune':
+        model_source = cfg.get('model_source', 'torchvision' if framework == 'pytorch' else 'huggingface')
+
+        if model_source == 'model_id':
+            # Validate that model_id exists
+            model_id = cfg.get('model_id')
+            if not model_id:
+                errors.append("model_id is required when model_source is 'model_id'")
+            else:
+                model_dir = os.path.join(MODELS_DIR, str(model_id))
+                if not os.path.isdir(model_dir):
+                    errors.append(f"Model with ID '{model_id}' not found in models directory")
+                else:
+                    # Validate model files exist
+                    if framework == 'pytorch':
+                        model_file = os.path.join(model_dir, 'model.pth')
+                        if not os.path.exists(model_file):
+                            errors.append(f"Model file 'model.pth' not found for model '{model_id}'")
+
+                        # Validate config exists for reconstruction
+                        config_file = os.path.join(model_dir, 'config.json')
+                        if not os.path.exists(config_file):
+                            errors.append(f"Model config file 'config.json' not found for model '{model_id}'")
+                        else:
+                            # Try to load and validate architecture info
+                            try:
+                                with open(config_file, 'r') as f:
+                                    model_config = json.load(f)
+                                    if 'architecture' not in model_config:
+                                        warnings.append(f"Model '{model_id}' is missing architecture information")
+                            except Exception as e:
+                                errors.append(f"Failed to read model config: {str(e)}")
+
+                    elif framework == 'huggingface':
+                        hf_config_file = os.path.join(model_dir, 'config.json')
+                        if not os.path.exists(hf_config_file):
+                            errors.append(f"HuggingFace model config not found for model '{model_id}'. "
+                                        "Make sure the model was trained with HuggingFace framework.")
+
+        elif model_source == 'custom':
+            # Validate that model_path is provided and exists
+            model_path = cfg.get('model_path')
+            if not model_path:
+                errors.append("model_path is required when model_source is 'custom'")
+            elif not os.path.exists(model_path):
+                warnings.append(f"Model file not found at: {model_path}")
+
+        elif model_source == 'torchvision' and framework == 'pytorch':
+            # Validate model_name is valid
+            valid_models = ['resnet18', 'resnet50', 'vgg16', 'densenet121']
+            model_name = cfg.get('model_name')
+            if model_name and model_name not in valid_models:
+                errors.append(f"Invalid torchvision model '{model_name}'. Must be one of: {', '.join(valid_models)}")
 
     # Data source validation (best-effort)
     data_cfg = cfg.get('data', {}) if isinstance(cfg.get('data'), dict) else {}
