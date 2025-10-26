@@ -1616,6 +1616,51 @@ def cancel_job(job_id):
     
     return jsonify(job)
 
+@app.route('/api/jobs/<job_id>', methods=['DELETE'])
+def delete_job(job_id):
+    """Delete a job (only if completed, failed, or cancelled)"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+
+    job = jobs[job_id]
+    if job['status'] in ['running', 'queued', 'paused']:
+        return jsonify({'error': 'Cannot delete running or queued jobs. Cancel first.'}), 400
+
+    # Remove from jobs dict
+    del jobs[job_id]
+    save_jobs()
+
+    # Optionally clean up job files (logs, checkpoints) - keeping them for now
+    # model_dir = os.path.join(MODELS_DIR, job_id)
+    # log_file = os.path.join(LOGS_DIR, f'{job_id}.log')
+
+    return jsonify({'message': 'Job deleted successfully'}), 200
+
+@app.route('/api/jobs/<job_id>/restart', methods=['POST'])
+def restart_job(job_id):
+    """Restart a failed or cancelled job"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+
+    job = jobs[job_id]
+    if job['status'] not in ['failed', 'cancelled']:
+        return jsonify({'error': 'Can only restart failed or cancelled jobs'}), 400
+
+    # Reset job status and clear error info
+    job['status'] = 'queued'
+    job['started'] = None
+    job['finished'] = None
+    job['error'] = None
+    job['progress'] = 0
+    job['eta_seconds'] = None
+    save_jobs()
+
+    # Re-enqueue the job
+    from threading import Thread
+    Thread(target=run_training_job, args=(job_id,), daemon=True).start()
+
+    return jsonify(job)
+
 def run_training_job(job_id):
     """Execute the training job"""
     job = jobs[job_id]
