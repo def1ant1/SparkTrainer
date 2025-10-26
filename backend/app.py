@@ -4571,6 +4571,142 @@ def user_preferences():
 
     return jsonify(users[user['id']].get('preferences', {}))
 
+@app.route('/api/user/settings', methods=['GET', 'PUT'])
+def user_settings():
+    """Get or update user settings (includes API keys, preferences, etc.)"""
+    user = _get_current_user()
+    if not user:
+        # Return default settings for unauthenticated users
+        return jsonify({
+            'name': '',
+            'email': '',
+            'organization': '',
+            'default_framework': 'pytorch',
+            'auto_save_interval': 300,
+            'notification_enabled': True,
+            'theme': 'dark'
+        })
+
+    users = _load_json(USERS_PATH, {})
+    user_id = user['id']
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        # Store settings
+        if user_id not in users:
+            users[user_id] = {'id': user_id, 'created': datetime.now().isoformat()}
+
+        users[user_id]['settings'] = data
+        users[user_id]['updated'] = datetime.now().isoformat()
+        _save_json(USERS_PATH, users)
+
+    return jsonify(users.get(user_id, {}).get('settings', {
+        'name': '',
+        'email': '',
+        'organization': '',
+        'default_framework': 'pytorch',
+        'auto_save_interval': 300,
+        'notification_enabled': True,
+        'theme': 'dark'
+    }))
+
+@app.route('/api/huggingface/download-model', methods=['POST'])
+def huggingface_download_model():
+    """Download a model from HuggingFace Hub"""
+    data = request.json or {}
+    model_id = data.get('model_id')
+    token = data.get('token')
+
+    if not model_id:
+        return jsonify({'error': 'model_id required'}), 400
+
+    try:
+        # Create a background job to download the model
+        job_id = str(uuid.uuid4())
+
+        def download_model_task():
+            try:
+                from transformers import AutoModel, AutoTokenizer
+                import os
+
+                # Set HF token if provided
+                if token:
+                    os.environ['HF_TOKEN'] = token
+
+                # Download to models directory
+                model_path = os.path.join(MODELS_DIR, model_id.replace('/', '_'))
+                os.makedirs(model_path, exist_ok=True)
+
+                # Download model and tokenizer
+                AutoModel.from_pretrained(model_id, cache_dir=model_path)
+                AutoTokenizer.from_pretrained(model_id, cache_dir=model_path)
+
+                return {'status': 'completed', 'path': model_path}
+            except Exception as e:
+                return {'status': 'failed', 'error': str(e)}
+
+        # Start download in background
+        from threading import Thread
+        Thread(target=download_model_task, daemon=True).start()
+
+        return jsonify({
+            'status': 'ok',
+            'job_id': job_id,
+            'message': f'Downloading {model_id} in background'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/huggingface/download-dataset', methods=['POST'])
+def huggingface_download_dataset():
+    """Download a dataset from HuggingFace Hub"""
+    data = request.json or {}
+    dataset_id = data.get('dataset_id')
+    token = data.get('token')
+
+    if not dataset_id:
+        return jsonify({'error': 'dataset_id required'}), 400
+
+    try:
+        # Create a background job to download the dataset
+        job_id = str(uuid.uuid4())
+
+        def download_dataset_task():
+            try:
+                from datasets import load_dataset
+                import os
+
+                # Set HF token if provided
+                if token:
+                    os.environ['HF_TOKEN'] = token
+
+                # Download to datasets directory
+                dataset_name = dataset_id.replace('/', '_')
+                dataset_path = os.path.join(DATASETS_DIR, dataset_name)
+                os.makedirs(dataset_path, exist_ok=True)
+
+                # Download dataset
+                ds = load_dataset(dataset_id, cache_dir=dataset_path)
+
+                # Save to disk
+                ds.save_to_disk(os.path.join(dataset_path, 'v1'))
+
+                return {'status': 'completed', 'path': dataset_path}
+            except Exception as e:
+                return {'status': 'failed', 'error': str(e)}
+
+        # Start download in background
+        from threading import Thread
+        Thread(target=download_dataset_task, daemon=True).start()
+
+        return jsonify({
+            'status': 'ok',
+            'job_id': job_id,
+            'message': f'Downloading {dataset_id} in background'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 # ---------------- Teams ----------------
 

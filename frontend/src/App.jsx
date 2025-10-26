@@ -10,6 +10,7 @@ import { ModelsPage, ModelDetail, ModelCompare } from './components/Models';
 import { DatasetsPage } from './components/Datasets';
 import ExperimentsPage from './components/Experiments';
 import PipelinesPage from './components/Pipelines';
+import ProfilePage from './components/Profile';
 import Labeling from './components/Labeling';
 
 // API Service
@@ -1400,6 +1401,11 @@ export default function App() {
             <PipelinesPage />
           </PageWithSidebars>
         )}
+        {currentPage === 'profile' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <ProfilePage />
+          </PageWithSidebars>
+        )}
           </PageTransition>
         </main>
       </div>
@@ -2321,6 +2327,7 @@ function Sidebar({ collapsed, setCollapsed, current, onNavigate }){
     { key: 'models', label: 'Models', icon: <BarChart3 size={18} /> },
     { key: 'datasets', label: 'Datasets', icon: <Database size={18} /> },
     { key: 'labeling', label: 'Labeling', icon: <List size={18} /> },
+    { key: 'profile', label: 'Profile', icon: <User size={18} /> },
     { key: 'builder', label: 'Builder', icon: <Monitor size={18} /> },
     { key: 'wizard', label: 'Quick Start', icon: <List size={18} /> },
     { key: 'admin', label: 'Admin', icon: <Settings size={18} /> },
