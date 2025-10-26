@@ -2132,12 +2132,23 @@ def list_datasets():
     return jsonify(items)
 
 
-@app.route('/api/datasets/<name>', methods=['GET'])
+@app.route('/api/datasets/<name>', methods=['GET', 'DELETE'])
 def dataset_detail(name):
     name = _safe_name(name)
     base = _dataset_dir(name)
     if not os.path.isdir(base):
         return jsonify({'error': 'Dataset not found'}), 404
+
+    if request.method == 'DELETE':
+        # Delete the entire dataset directory
+        import shutil
+        try:
+            shutil.rmtree(base)
+            return jsonify({'status': 'ok', 'message': 'Dataset deleted successfully'})
+        except Exception as e:
+            return jsonify({'error': f'Failed to delete dataset: {str(e)}'}), 500
+
+    # GET
     versions = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
     versions.sort(key=lambda d: os.path.getmtime(os.path.join(base, d)), reverse=True)
     out_vers = []

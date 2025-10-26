@@ -1,5 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
+// Toast hook for notifications
+const useToast = () => {
+  return {
+    push: (msg) => {
+      const { type = 'info', title, message } = msg;
+      const colors = { success: '#10b981', error: '#ef4444', info: '#3b82f6', warning: '#f59e0b' };
+      const color = colors[type] || colors.info;
+      const toast = document.createElement('div');
+      toast.style.cssText = `position:fixed;top:20px;right:20px;background:${color};color:white;padding:12px 20px;border-radius:8px;z-index:9999;box-shadow:0 4px 6px rgba(0,0,0,0.2)`;
+      toast.textContent = title + (message ? ': ' + message : '');
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+  };
+};
+
 export function DatasetsPage({ api }){
   const [items, setItems] = useState([]);
   const [q, setQ] = useState('');
@@ -35,6 +51,10 @@ export function DatasetsPage({ api }){
   const [metaEditing, setMetaEditing] = useState({ description: '', tags: '', categories: '', type: '' });
   const pageSize = 12;
   const [template, setTemplate] = useState({ name:'', template:'image_classification', version:'v1' });
+  // Video processing
+  const [videoPath, setVideoPath] = useState('');
+  const [videoIndexJob, setVideoIndexJob] = useState(null);
+  const toast = useToast();
 
   const load = async () => {
     setLoading(true);
@@ -72,13 +92,32 @@ export function DatasetsPage({ api }){
   };
 
   const upload = async () => {
-    if (!upName || !upFile){ alert('Pick a name and a file'); return; }
+    if (!upName || !upFile){ toast.push({type:'warning', title:'Missing fields', message:'Pick a name and a file'}); return; }
     try{
       await api.uploadDataset(upName, upFile, upVer);
       setUpFile(null); setUpName(''); setUpVer('');
       load();
-      alert('Uploaded');
-    } catch(e){ alert('Upload failed: ' + e.message); }
+      toast.push({type:'success', title:'Dataset uploaded'});
+    } catch(e){ toast.push({type:'error', title:'Upload failed', message:e.message}); }
+  };
+
+  const deleteDataset = async (name) => {
+    if (!confirm(`Delete dataset "${name}" and all its versions? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/datasets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Delete failed');
+      }
+      if (sel === name) {
+        setSel(null);
+        setDetail(null);
+      }
+      toast.push({ type: 'success', title: 'Dataset deleted' });
+      load();
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Delete failed', message: String(e.message || e) });
+    }
   };
 
   const doSync = async () => {
@@ -89,7 +128,7 @@ export function DatasetsPage({ api }){
   };
 
   const doStreamIngest = async () => {
-    if (!streamName || !streamFile){ alert('Provide dataset name and choose a file'); return; }
+    if (!streamName || !streamFile){ toast.push({type:'warning', title:'Missing fields', message:'Provide dataset name and choose a file'}); return; }
     try{
       setStreamProgress(0);
       const start = await api.ingestStreamStart({ name: streamName, version: streamVer, filename: streamFile.name, type: streamType });
@@ -113,9 +152,35 @@ export function DatasetsPage({ api }){
       });
       const header = (streamHeader||'').split(',').map(s=>s.trim()).filter(Boolean);
       const fin = await api.ingestStreamFinalize({ session, mapping, header, type: streamType });
-      if (fin.status === 'ok') { alert('Ingested'); load(); setStreamProgress(0); }
-      else { alert(JSON.stringify(fin)); }
-    } catch(e){ alert('Streaming ingest failed: ' + e.message); }
+      if (fin.status === 'ok') { toast.push({type:'success', title:'Dataset ingested'}); load(); setStreamProgress(0); }
+      else { toast.push({type:'error', title:'Ingest failed', message:JSON.stringify(fin)}); }
+    } catch(e){ toast.push({type:'error', title:'Streaming ingest failed', message:e.message}); }
+  };
+
+  const indexVideos = async () => {
+    if (!videoPath){ toast.push({type:'warning', title:'Missing path', message:'Provide video directory path'}); return; }
+    try {
+      const res = await fetch('/api/datasets/index', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: upName || `video-dataset-${Date.now()}`,
+          source_path: videoPath,
+          version: upVer || 'v1',
+          recursive: true,
+          extract_metadata: true
+        })
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        setVideoIndexJob(data.job_id);
+        toast.push({type:'success', title:'Video indexing started', message:`Job ID: ${data.job_id}`});
+      } else {
+        toast.push({type:'error', title:'Index failed', message:data.error || 'Unknown error'});
+      }
+    } catch (e) {
+      toast.push({type:'error', title:'Index failed', message:e.message});
+    }
   };
 
   return (
@@ -159,8 +224,22 @@ export function DatasetsPage({ api }){
             <option value="conversational">Conversational</option>
           </select>
           <input className="border border-border rounded px-2 py-1 bg-surface" placeholder="Version" value={template.version} onChange={e=>setTemplate({...template, version:e.target.value})}/>
-          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={async()=>{ const res = await api.createDatasetTemplate(template); if (res.status==='ok'){ load(); alert('Created'); } else alert(JSON.stringify(res)); }}>Create from Template</button>
+          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={async()=>{ const res = await api.createDatasetTemplate(template); if (res.status==='ok'){ load(); toast.push({type:'success', title:'Template created'}); } else toast.push({type:'error', title:'Failed', message:JSON.stringify(res)}); }}>Create from Template</button>
         </div>
+      </div>
+
+      <div className="bg-surface p-4 rounded border border-border space-y-3">
+        <div className="font-semibold text-text">Video Dataset Indexing</div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Video directory path" value={videoPath} onChange={e=>setVideoPath(e.target.value)} />
+          <button onClick={indexVideos} className="px-3 py-2 bg-primary text-on-primary rounded hover:brightness-110">Index Videos</button>
+          {videoIndexJob && (
+            <div className="md:col-span-2 text-sm text-text/70">
+              Job ID: <span className="font-mono text-xs">{videoIndexJob}</span>
+            </div>
+          )}
+        </div>
+        <div className="text-xs text-text/60">Point to a directory containing video files. The system will scan, extract metadata, and create a manifest for training.</div>
       </div>
 
       <div className="bg-surface p-4 rounded border border-border space-y-3">
@@ -187,7 +266,7 @@ export function DatasetsPage({ api }){
           </div>
         </div>
         <div className="text-xs text-text/70">Progress: {streamProgress}%</div>
-        <div className="w-full h-2 bg-muted rounded"><div className="h-2 bg-blue-500 rounded" style={{ width: `${streamProgress}%` }} /></div>
+        <div className="w-full h-2 bg-muted rounded"><div className="h-2 bg-primary rounded" style={{ width: `${streamProgress}%` }} /></div>
       </div>
 
       <div className="bg-surface p-4 rounded border border-border space-y-3">
@@ -211,9 +290,9 @@ export function DatasetsPage({ api }){
           <div className="flex gap-2">
             <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={async()=>{ const res = await api.ingestPreview({ type: ingType, text: ingText }); setIngPrev(res); if (res.columns) setIngMap(m=>({ ...m, text: res.columns[0]||'text' })); }}>Preview</button>
             <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={async()=>{
-              if (!ingPrev) { alert('Run preview first'); return; }
+              if (!ingPrev) { toast.push({type:'warning', title:'Preview required', message:'Run preview first'}); return; }
               const payload = { name: ingName, version: ingVer, type: ingType, header: ingPrev.columns, mapping: ingMap, rows: ingPrev.rows };
-              const out = await api.ingestApply(payload); if (out.status==='ok'){ alert('Ingested'); setIngText(''); load(); } else alert(JSON.stringify(out));
+              const out = await api.ingestApply(payload); if (out.status==='ok'){ toast.push({type:'success', title:'Dataset ingested'}); setIngText(''); load(); } else toast.push({type:'error', title:'Failed', message:JSON.stringify(out)});
             }}>Apply</button>
           </div>
         </div>
@@ -256,30 +335,41 @@ export function DatasetsPage({ api }){
         view==='grid' ? (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {filtered.map(d => (
-              <div key={d.name} className="bg-surface p-4 rounded border border-border hover:shadow cursor-pointer" onClick={()=>openDetail(d.name)}>
-                <div className="font-semibold">{d.name}</div>
-                <div className="text-xs text-text/70">Versions: {d.versions}</div>
-                {Array.isArray(d.meta?.tags) && d.meta.tags.length>0 && (
-                  <div className="mt-1 text-[10px] text-text/60">{d.meta.tags.slice(0,3).join(', ')}{d.meta.tags.length>3?' …':''}</div>
-                )}
-                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                  <div className="p-2 bg-muted rounded border border-border"><div className="text-text/70">Files</div><div className="font-semibold">{d.stats.total_files}</div></div>
-                  <div className="p-2 bg-muted rounded border border-border"><div className="text-text/70">Size</div><div className="font-semibold">{(d.stats.total_bytes/1e6).toFixed(1)} MB</div></div>
-                  <div className="p-2 bg-muted rounded border border-border"><div className="text-text/70">Images</div><div className="font-semibold">{d.stats.image_count}</div></div>
+              <div key={d.name} className="bg-surface p-4 rounded border border-border hover:shadow group relative">
+                <div className="cursor-pointer" onClick={()=>openDetail(d.name)}>
+                  <div className="font-semibold">{d.name}</div>
+                  <div className="text-xs text-text/70">Versions: {d.versions}</div>
+                  {Array.isArray(d.meta?.tags) && d.meta.tags.length>0 && (
+                    <div className="mt-1 text-[10px] text-text/60">{d.meta.tags.slice(0,3).join(', ')}{d.meta.tags.length>3?' …':''}</div>
+                  )}
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                    <div className="p-2 bg-muted rounded border border-border"><div className="text-text/70">Files</div><div className="font-semibold">{d.stats.total_files}</div></div>
+                    <div className="p-2 bg-muted rounded border border-border"><div className="text-text/70">Size</div><div className="font-semibold">{(d.stats.total_bytes/1e6).toFixed(1)} MB</div></div>
+                    <div className="p-2 bg-muted rounded border border-border"><div className="text-text/70">Images</div><div className="font-semibold">{d.stats.image_count}</div></div>
+                  </div>
                 </div>
+                <button
+                  onClick={(e)=>{e.stopPropagation(); deleteDataset(d.name);}}
+                  className="absolute top-2 right-2 px-2 py-1 text-xs bg-danger/10 text-danger border border-danger/30 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-danger/20"
+                >
+                  Delete
+                </button>
               </div>
             ))}
           </div>
         ) : (
           <table className="w-full">
-            <thead className="bg-muted border-b border-border"><tr><th className="px-3 py-2 text-left">Name</th><th className="px-3 py-2 text-left">Versions</th><th className="px-3 py-2 text-left">Files</th><th className="px-3 py-2 text-left">Size</th></tr></thead>
+            <thead className="bg-muted border-b border-border"><tr><th className="px-3 py-2 text-left">Name</th><th className="px-3 py-2 text-left">Versions</th><th className="px-3 py-2 text-left">Files</th><th className="px-3 py-2 text-left">Size</th><th className="px-3 py-2 text-left">Actions</th></tr></thead>
             <tbody className="divide-y">
               {filtered.map(d => (
-                <tr key={d.name} className="hover:bg-muted" onClick={()=>openDetail(d.name)}>
-                  <td className="px-3 py-2 font-semibold">{d.name}</td>
+                <tr key={d.name} className="hover:bg-muted">
+                  <td className="px-3 py-2 font-semibold cursor-pointer" onClick={()=>openDetail(d.name)}>{d.name}</td>
                   <td className="px-3 py-2">{d.versions}</td>
                   <td className="px-3 py-2">{d.stats.total_files}</td>
                   <td className="px-3 py-2">{(d.stats.total_bytes/1e6).toFixed(1)} MB</td>
+                  <td className="px-3 py-2">
+                    <button onClick={()=>deleteDataset(d.name)} className="text-danger hover:brightness-110 text-sm">Delete</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -297,7 +387,10 @@ export function DatasetsPage({ api }){
               </div>
               <div className="text-sm text-text/70">Versions: {detail.versions?.length || 0}</div>
             </div>
-            <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={()=>{setSel(null); setDetail(null);}}>Close</button>
+            <div className="flex gap-2">
+              <button className="px-3 py-2 border border-danger/30 rounded bg-danger/10 text-danger hover:bg-danger/20" onClick={()=>deleteDataset(detail.name)}>Delete</button>
+              <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={()=>{setSel(null); setDetail(null);}}>Close</button>
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -315,17 +408,17 @@ export function DatasetsPage({ api }){
                         <a className="text-primary" href={`/api/datasets/${encodeURIComponent(detail.name)}/download?version=${encodeURIComponent(v.version)}`}>Download</a>
                         <button className="text-secondary" onClick={async()=>{
                           const base = prompt('New version name based on '+v.version+':'); if (!base) return;
-                          const res = await api.createDatasetVersion(detail.name, { base: v.version, new: base }); if (res.status==='ok') { load(); alert('Created '+base); } else alert(JSON.stringify(res));
+                          const res = await api.createDatasetVersion(detail.name, { base: v.version, new: base }); if (res.status==='ok') { load(); toast.push({type:'success', title:'Version created', message:base}); } else toast.push({type:'error', title:'Failed', message:JSON.stringify(res)});
                         }}>Branch</button>
                         <button className="text-warning" onClick={async()=>{
                           const target = v.version; if (!confirm('Rollback to '+target+'?')) return;
-                          const res = await api.rollbackDatasetVersion(detail.name, { target }); if (res.status==='ok') { load(); alert('Rollback version '+res.version+' created'); } else alert(JSON.stringify(res));
+                          const res = await api.rollbackDatasetVersion(detail.name, { target }); if (res.status==='ok') { load(); toast.push({type:'success', title:'Rollback created', message:`Version ${res.version}`}); } else toast.push({type:'error', title:'Failed', message:JSON.stringify(res)});
                         }}>Rollback</button>
-                        <button className="text-blue-600" onClick={async()=>{
+                        <button className="text-primary" onClick={async()=>{
                           const other = prompt('Diff against version:'); if (!other) return;
                           const res = await api.diffDatasetVersions(detail.name, { a: v.version, b: other }); if (res.added || res.removed || res.changed) {
-                            alert(`Diff ${v.version} -> ${other}\nAdded: ${res.added.length}\nRemoved: ${res.removed.length}\nChanged: ${res.changed.length}`);
-                          } else { alert(JSON.stringify(res)); }
+                            toast.push({type:'info', title:'Diff result', message:`Added: ${res.added.length}, Removed: ${res.removed.length}, Changed: ${res.changed.length}`});
+                          } else { toast.push({type:'info', title:'Diff result', message:JSON.stringify(res)}); }
                         }}>Diff</button>
                       </td>
                     </tr>
@@ -360,7 +453,7 @@ export function DatasetsPage({ api }){
               <label className="text-xs">Tags<input className="w-full border border-border rounded px-2 py-1 bg-surface" placeholder="comma-separated" value={metaEditing.tags} onChange={e=>setMetaEditing({...metaEditing, tags:e.target.value})}/></label>
               <label className="text-xs">Categories<input className="w-full border border-border rounded px-2 py-1 bg-surface" placeholder="comma-separated" value={metaEditing.categories} onChange={e=>setMetaEditing({...metaEditing, categories:e.target.value})}/></label>
               <label className="text-xs">Description<textarea className="w-full border border-border rounded px-2 py-1 bg-surface" rows={3} value={metaEditing.description} onChange={e=>setMetaEditing({...metaEditing, description:e.target.value})}/></label>
-              <div><button className="px-3 py-1 border rounded" onClick={async()=>{ const payload={...metaEditing, tags: metaEditing.tags.split(',').map(s=>s.trim()).filter(Boolean), categories: metaEditing.categories.split(',').map(s=>s.trim()).filter(Boolean)}; const res = await api.updateDatasetMetadata(detail.name, payload); if (res.status==='ok'){ alert('Saved'); load(); } else alert(JSON.stringify(res)); }}>Save</button></div>
+              <div><button className="px-3 py-1 border rounded" onClick={async()=>{ const payload={...metaEditing, tags: metaEditing.tags.split(',').map(s=>s.trim()).filter(Boolean), categories: metaEditing.categories.split(',').map(s=>s.trim()).filter(Boolean)}; const res = await api.updateDatasetMetadata(detail.name, payload); if (res.status==='ok'){ toast.push({type:'success', title:'Metadata saved'}); load(); } else toast.push({type:'error', title:'Failed', message:JSON.stringify(res)}); }}>Save</button></div>
             </div>
             <div className="space-y-2">
               <div className="text-sm font-semibold">Samples</div>
@@ -379,13 +472,13 @@ export function DatasetsPage({ api }){
                 <button className="px-2 py-1 border rounded" disabled={(samples.page+1)>=Math.ceil(samples.total/pageSize)} onClick={()=>loadSamples(detail.name, detail.versions?.[0]?.version, samples.page+1)}>Next</button>
               </div>
               <div className="mt-2">
-                <button className="px-3 py-1 border rounded text-sm" onClick={async()=>{ try{ const v = detail.versions?.[0]?.version; const res = await fetch(`/api/datasets/${encodeURIComponent(detail.name)}/quality?version=${encodeURIComponent(v||'')}&near=1`); const q = await res.json(); setQuality(q); }catch(e){ alert('Quality check failed'); } }}>Run Quality Check</button>
+                <button className="px-3 py-1 border rounded text-sm" onClick={async()=>{ try{ const v = detail.versions?.[0]?.version; const res = await fetch(`/api/datasets/${encodeURIComponent(detail.name)}/quality?version=${encodeURIComponent(v||'')}&near=1`); const q = await res.json(); setQuality(q); toast.push({type:'success', title:'Quality check complete'}); }catch(e){ toast.push({type:'error', title:'Quality check failed', message:e.message}); } }}>Run Quality Check</button>
                 {quality && quality.suggestions && (
                   <button className="ml-2 px-3 py-1 border rounded text-sm" onClick={async()=>{
                     const v = detail.versions?.[0]?.version; const sugg = quality.suggestions || {};
                     const payload = { version: v, remove: sugg.duplicates_to_remove||[], balance: sugg.balance_plan||{} };
                     const out = await api.applyQuality(detail.name, payload);
-                    if (out.status==='ok'){ alert('Applied'); load(); } else alert(JSON.stringify(out));
+                    if (out.status==='ok'){ toast.push({type:'success', title:'Suggestions applied'}); load(); } else toast.push({type:'error', title:'Failed', message:JSON.stringify(out)});
                   }}>Apply Suggestions</button>
                 )}
               </div>
