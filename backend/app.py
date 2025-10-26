@@ -2547,7 +2547,8 @@ def dataset_annotations_export_yolo(name):
                 cls = class_to_id.get(b.get('label'), 0)
                 lines.append(f"{cls} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
             rel = it['path']
-            lbl_path = f"labels/{os.path.splitext(rel.replace('\\\\','/').replace('\\','/'))[0]}.txt"
+            normalized_path = rel.replace('\\\\', '/').replace('\\', '/')
+            lbl_path = f"labels/{os.path.splitext(normalized_path)[0]}.txt"
             z.writestr(lbl_path, ('\n'.join(lines)+'\n').encode('utf-8'))
     mem.seek(0)
     return send_file(mem, mimetype='application/zip', as_attachment=True, download_name=f"{name}_{version or 'latest'}_yolo.zip")
