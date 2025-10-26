@@ -123,67 +123,67 @@ export function DatasetsPage({ api }){
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Datasets</h1>
         <div className="flex flex-wrap gap-2 items-center">
-          <input className="border rounded px-3 py-2" placeholder="Search" value={q} onChange={e=>setQ(e.target.value)} />
-          <select className="border rounded px-2 py-2" value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
+          <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Search" value={q} onChange={e=>setQ(e.target.value)} />
+          <select className="border border-border rounded px-2 py-2 bg-surface" value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
             <option value="">All Types</option>
             {['image_classification','text_generation','qa','instruction_tuning','conversational'].map(t=> <option key={t} value={t}>{t}</option>)}
           </select>
-          <input className="border rounded px-3 py-2" placeholder="Filter tag" value={tagFilter} onChange={e=>setTagFilter(e.target.value)} />
-          <select className="border rounded px-2 py-2" value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+          <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Filter tag" value={tagFilter} onChange={e=>setTagFilter(e.target.value)} />
+          <select className="border border-border rounded px-2 py-2 bg-surface" value={sortBy} onChange={e=>setSortBy(e.target.value)}>
             <option value="date">Sort: Date</option>
             <option value="size">Sort: Size</option>
             <option value="files">Sort: Files</option>
             <option value="name">Sort: Name</option>
           </select>
-          <button onClick={()=>setView(view==='grid'?'list':'grid')} className="px-3 py-2 border rounded">{view==='grid'?'List View':'Grid View'}</button>
+          <button onClick={()=>setView(view==='grid'?'list':'grid')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">{view==='grid'?'List View':'Grid View'}</button>
         </div>
       </div>
 
       <div className="bg-surface p-4 rounded border border-border space-y-3">
-        <div className="font-semibold text-gray-700">Create / Upload</div>
+        <div className="font-semibold text-text">Create / Upload</div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <input className="border rounded px-3 py-2" placeholder="Dataset name" value={upName} onChange={e=>setUpName(e.target.value)} />
-          <input className="border rounded px-3 py-2" placeholder="Version (optional)" value={upVer} onChange={e=>setUpVer(e.target.value)} />
-          <input type="file" onChange={e=>setUpFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)} />
+          <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Dataset name" value={upName} onChange={e=>setUpName(e.target.value)} />
+          <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Version (optional)" value={upVer} onChange={e=>setUpVer(e.target.value)} />
+          <input type="file" className="bg-surface" onChange={e=>setUpFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)} />
           <button onClick={upload} className="px-3 py-2 bg-blue-600 text-white rounded">Upload</button>
         </div>
-        <div className="text-xs text-gray-500">Tip: upload a .zip to extract on the server; otherwise file is stored as-is inside the version folder.</div>
+        <div className="text-xs text-text/60">Tip: upload a .zip to extract on the server; otherwise file is stored as-is inside the version folder.</div>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mt-3 items-end">
           <div className="text-sm font-semibold md:col-span-5">Templates</div>
-          <input className="border rounded px-2 py-1" placeholder="Name" value={template.name} onChange={e=>setTemplate({...template, name:e.target.value})}/>
-          <select className="border rounded px-2 py-1" value={template.template} onChange={e=>setTemplate({...template, template:e.target.value})}>
+          <input className="border border-border rounded px-2 py-1 bg-surface" placeholder="Name" value={template.name} onChange={e=>setTemplate({...template, name:e.target.value})}/>
+          <select className="border border-border rounded px-2 py-1 bg-surface" value={template.template} onChange={e=>setTemplate({...template, template:e.target.value})}>
             <option value="image_classification">Image classification</option>
             <option value="text_generation">Text generation</option>
             <option value="qa">Question answering</option>
             <option value="instruction_tuning">Instruction tuning</option>
             <option value="conversational">Conversational</option>
           </select>
-          <input className="border rounded px-2 py-1" placeholder="Version" value={template.version} onChange={e=>setTemplate({...template, version:e.target.value})}/>
-          <button className="px-3 py-2 border rounded" onClick={async()=>{ const res = await api.createDatasetTemplate(template); if (res.status==='ok'){ load(); alert('Created'); } else alert(JSON.stringify(res)); }}>Create from Template</button>
+          <input className="border border-border rounded px-2 py-1 bg-surface" placeholder="Version" value={template.version} onChange={e=>setTemplate({...template, version:e.target.value})}/>
+          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={async()=>{ const res = await api.createDatasetTemplate(template); if (res.status==='ok'){ load(); alert('Created'); } else alert(JSON.stringify(res)); }}>Create from Template</button>
         </div>
       </div>
 
       <div className="bg-surface p-4 rounded border border-border space-y-3">
-        <div className="font-semibold text-gray-700">Large File Ingest (Streaming)</div>
+        <div className="font-semibold text-text">Large File Ingest (Streaming)</div>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-          <input className="border rounded px-3 py-2" placeholder="Dataset name" value={streamName} onChange={e=>setStreamName(e.target.value)} />
-          <input className="border rounded px-3 py-2" placeholder="Version" value={streamVer} onChange={e=>setStreamVer(e.target.value)} />
-          <select className="border rounded px-3 py-2" value={streamType} onChange={e=>setStreamType(e.target.value)}>
+          <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Dataset name" value={streamName} onChange={e=>setStreamName(e.target.value)} />
+          <input className="border border-border rounded px-3 py-2 bg-surface" placeholder="Version" value={streamVer} onChange={e=>setStreamVer(e.target.value)} />
+          <select className="border border-border rounded px-3 py-2 bg-surface" value={streamType} onChange={e=>setStreamType(e.target.value)}>
             <option value="csv">CSV</option>
             <option value="jsonl">JSONL</option>
           </select>
-          <input type="file" onChange={e=>setStreamFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)} />
+          <input type="file" className="bg-surface" onChange={e=>setStreamFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)} />
           <button className="px-3 py-2 border rounded bg-surface hover:bg-muted" onClick={doStreamIngest}>Upload & Map</button>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <label className="text-sm">CSV Header (comma-separated)</label>
-            <input className="w-full border rounded px-3 py-2 font-mono text-xs" value={streamHeader} onChange={e=>setStreamHeader(e.target.value)} placeholder="id,text,label" />
+            <input className="w-full border border-border rounded px-3 py-2 bg-surface font-mono text-xs" value={streamHeader} onChange={e=>setStreamHeader(e.target.value)} placeholder="id,text,label" />
             <div className="text-[11px] text-text/60 mt-1">For JSONL, leave header empty.</div>
           </div>
           <div>
             <label className="text-sm">Server-side Mapping (key:value per line)</label>
-            <textarea className="w-full border rounded px-3 py-2 font-mono text-xs" rows={4} value={streamMap} onChange={e=>setStreamMap(e.target.value)} placeholder="text:text\nlabel:label" />
+            <textarea className="w-full border border-border rounded px-3 py-2 bg-surface font-mono text-xs" rows={4} value={streamMap} onChange={e=>setStreamMap(e.target.value)} placeholder="text:text\nlabel:label" />
           </div>
         </div>
         <div className="text-xs text-text/70">Progress: {streamProgress}%</div>
@@ -191,26 +191,26 @@ export function DatasetsPage({ api }){
       </div>
 
       <div className="bg-surface p-4 rounded border border-border space-y-3">
-        <div className="font-semibold text-gray-700">Ingest Wizard (CSV / JSONL)</div>
+        <div className="font-semibold text-text">Ingest Wizard (CSV / JSONL)</div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
           <div>
             <label className="text-sm">Dataset</label>
-            <input className="w-full border rounded px-3 py-2" placeholder="name" value={ingName} onChange={e=>setIngName(e.target.value)} />
+            <input className="w-full border border-border rounded px-3 py-2 bg-surface" placeholder="name" value={ingName} onChange={e=>setIngName(e.target.value)} />
           </div>
           <div>
             <label className="text-sm">Version</label>
-            <input className="w-full border rounded px-3 py-2" placeholder="v1" value={ingVer} onChange={e=>setIngVer(e.target.value)} />
+            <input className="w-full border border-border rounded px-3 py-2 bg-surface" placeholder="v1" value={ingVer} onChange={e=>setIngVer(e.target.value)} />
           </div>
           <div>
             <label className="text-sm">Type</label>
-            <select className="w-full border rounded px-3 py-2" value={ingType} onChange={e=>setIngType(e.target.value)}>
+            <select className="w-full border border-border rounded px-3 py-2 bg-surface" value={ingType} onChange={e=>setIngType(e.target.value)}>
               <option value="csv">CSV</option>
               <option value="jsonl">JSONL</option>
             </select>
           </div>
           <div className="flex gap-2">
-            <button className="px-3 py-2 border rounded" onClick={async()=>{ const res = await api.ingestPreview({ type: ingType, text: ingText }); setIngPrev(res); if (res.columns) setIngMap(m=>({ ...m, text: res.columns[0]||'text' })); }}>Preview</button>
-            <button className="px-3 py-2 border rounded" onClick={async()=>{
+            <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={async()=>{ const res = await api.ingestPreview({ type: ingType, text: ingText }); setIngPrev(res); if (res.columns) setIngMap(m=>({ ...m, text: res.columns[0]||'text' })); }}>Preview</button>
+            <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={async()=>{
               if (!ingPrev) { alert('Run preview first'); return; }
               const payload = { name: ingName, version: ingVer, type: ingType, header: ingPrev.columns, mapping: ingMap, rows: ingPrev.rows };
               const out = await api.ingestApply(payload); if (out.status==='ok'){ alert('Ingested'); setIngText(''); load(); } else alert(JSON.stringify(out));
@@ -219,7 +219,7 @@ export function DatasetsPage({ api }){
         </div>
         <div>
           <label className="text-sm">Paste CSV or JSONL sample</label>
-          <textarea className="w-full border rounded px-3 py-2 font-mono text-xs" rows={8} value={ingText} onChange={e=>setIngText(e.target.value)} placeholder="id,text,label\n1,hello,positive\n2,bye,negative" />
+          <textarea className="w-full border border-border rounded px-3 py-2 bg-surface font-mono text-xs" rows={8} value={ingText} onChange={e=>setIngText(e.target.value)} placeholder="id,text,label\n1,hello,positive\n2,bye,negative" />
         </div>
         {ingPrev && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -240,7 +240,7 @@ export function DatasetsPage({ api }){
                 {['text','label','instruction','input','output'].map(k => (
                   <label key={k} className="block">
                     <div className="text-[11px] text-text/60">{k}</div>
-                    <select className="w-full border rounded px-2 py-1" value={ingMap[k]||''} onChange={e=>setIngMap({...ingMap, [k]: e.target.value})}>
+                    <select className="w-full border border-border rounded px-2 py-1 bg-surface" value={ingMap[k]||''} onChange={e=>setIngMap({...ingMap, [k]: e.target.value})}>
                       <option value="">(none)</option>
                       {(ingPrev.columns||[]).map(c => (<option key={c} value={c}>{c}</option>))}
                     </select>
@@ -293,7 +293,7 @@ export function DatasetsPage({ api }){
             <div>
               <div className="text-2xl font-bold flex items-center gap-2">
                 <span>{detail.name}</span>
-                {detail.meta?.dvc_detected && (<span className="px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-700 border border-purple-200">DVC</span>)}
+                {detail.meta?.dvc_detected && (<span className="px-2 py-0.5 text-xs rounded bg-accent/10 text-accent border border-accent/30">DVC</span>)}
               </div>
               <div className="text-sm text-text/70">Versions: {detail.versions?.length || 0}</div>
             </div>
@@ -356,10 +356,10 @@ export function DatasetsPage({ api }){
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <div className="text-sm font-semibold">Metadata</div>
-              <label className="text-xs">Type<select className="w-full border rounded px-2 py-1" value={metaEditing.type} onChange={e=>setMetaEditing({...metaEditing, type:e.target.value})}><option value="">-</option><option value="image_classification">image_classification</option><option value="text_generation">text_generation</option><option value="qa">qa</option><option value="instruction_tuning">instruction_tuning</option><option value="conversational">conversational</option></select></label>
-              <label className="text-xs">Tags<input className="w-full border rounded px-2 py-1" placeholder="comma-separated" value={metaEditing.tags} onChange={e=>setMetaEditing({...metaEditing, tags:e.target.value})}/></label>
-              <label className="text-xs">Categories<input className="w-full border rounded px-2 py-1" placeholder="comma-separated" value={metaEditing.categories} onChange={e=>setMetaEditing({...metaEditing, categories:e.target.value})}/></label>
-              <label className="text-xs">Description<textarea className="w-full border rounded px-2 py-1" rows={3} value={metaEditing.description} onChange={e=>setMetaEditing({...metaEditing, description:e.target.value})}/></label>
+              <label className="text-xs">Type<select className="w-full border border-border rounded px-2 py-1 bg-surface" value={metaEditing.type} onChange={e=>setMetaEditing({...metaEditing, type:e.target.value})}><option value="">-</option><option value="image_classification">image_classification</option><option value="text_generation">text_generation</option><option value="qa">qa</option><option value="instruction_tuning">instruction_tuning</option><option value="conversational">conversational</option></select></label>
+              <label className="text-xs">Tags<input className="w-full border border-border rounded px-2 py-1 bg-surface" placeholder="comma-separated" value={metaEditing.tags} onChange={e=>setMetaEditing({...metaEditing, tags:e.target.value})}/></label>
+              <label className="text-xs">Categories<input className="w-full border border-border rounded px-2 py-1 bg-surface" placeholder="comma-separated" value={metaEditing.categories} onChange={e=>setMetaEditing({...metaEditing, categories:e.target.value})}/></label>
+              <label className="text-xs">Description<textarea className="w-full border border-border rounded px-2 py-1 bg-surface" rows={3} value={metaEditing.description} onChange={e=>setMetaEditing({...metaEditing, description:e.target.value})}/></label>
               <div><button className="px-3 py-1 border rounded" onClick={async()=>{ const payload={...metaEditing, tags: metaEditing.tags.split(',').map(s=>s.trim()).filter(Boolean), categories: metaEditing.categories.split(',').map(s=>s.trim()).filter(Boolean)}; const res = await api.updateDatasetMetadata(detail.name, payload); if (res.status==='ok'){ alert('Saved'); load(); } else alert(JSON.stringify(res)); }}>Save</button></div>
             </div>
             <div className="space-y-2">
@@ -408,7 +408,7 @@ export function DatasetsPage({ api }){
                     {Object.entries(quality.class_counts||{}).map(([cls,cnt]) => (
                       <div key={cls} className="flex items-center gap-2">
                         <div className="w-32">{cls}</div>
-                        <div className="flex-1 bg-muted h-2 rounded"><div className="bg-green-500 h-2 rounded" style={{ width: `${Math.min(100, (cnt/Math.max(1, Object.values(quality.class_counts||{}).reduce((a,b)=>a+b,0)))*100)}%` }} /></div>
+                        <div className="flex-1 bg-muted h-2 rounded"><div className="bg-accent h-2 rounded" style={{ width: `${Math.min(100, (cnt/Math.max(1, Object.values(quality.class_counts||{}).reduce((a,b)=>a+b,0)))*100)}%` }} /></div>
                         <div className="w-10 text-right">{cnt}</div>
                       </div>
                     ))}

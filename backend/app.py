@@ -3407,6 +3407,7 @@ def pipeline_templates():
             'id': 'simple-train-eval',
             'name': 'Simple Train & Evaluate',
             'description': 'Train a model and evaluate it on a test set',
+            'category': 'basic',
             'nodes': [
                 {
                     'id': 'train',
@@ -3439,6 +3440,7 @@ def pipeline_templates():
             'id': 'data-prep-train',
             'name': 'Data Prep → Train',
             'description': 'Prepare dataset then train a model',
+            'category': 'basic',
             'nodes': [
                 {
                     'id': 'prep',
@@ -3461,6 +3463,7 @@ def pipeline_templates():
             'id': 'hyperparameter-sweep',
             'name': 'Hyperparameter Sweep',
             'description': 'Train multiple models with different hyperparameters',
+            'category': 'optimization',
             'nodes': [
                 {
                     'id': 'train-lr1',
@@ -3497,6 +3500,7 @@ def pipeline_templates():
             'id': 'ensemble',
             'name': 'Model Ensemble',
             'description': 'Train multiple models and ensemble them',
+            'category': 'advanced',
             'nodes': [
                 {
                     'id': 'model1',
@@ -3527,6 +3531,473 @@ def pipeline_templates():
                 {'from': 'model1', 'to': 'ensemble'},
                 {'from': 'model2', 'to': 'ensemble'},
                 {'from': 'model3', 'to': 'ensemble'}
+            ]
+        },
+        {
+            'id': 'model-merging',
+            'name': 'Model Merging (SLERP/TIES)',
+            'description': 'Merge multiple pre-trained models into a single unified model',
+            'category': 'advanced',
+            'nodes': [
+                {
+                    'id': 'model1',
+                    'name': 'Load Model 1',
+                    'type': 'load',
+                    'position': {'x': 100, 'y': 50},
+                    'job': {
+                        'name': 'Load Base Model 1',
+                        'type': 'load',
+                        'framework': 'pytorch',
+                        'config': {'model_source': 'huggingface', 'model_name': 'bert-base-uncased'}
+                    }
+                },
+                {
+                    'id': 'model2',
+                    'name': 'Load Model 2',
+                    'type': 'load',
+                    'position': {'x': 100, 'y': 150},
+                    'job': {
+                        'name': 'Load Base Model 2',
+                        'type': 'load',
+                        'framework': 'pytorch',
+                        'config': {'model_source': 'huggingface', 'model_name': 'roberta-base'}
+                    }
+                },
+                {
+                    'id': 'model3',
+                    'name': 'Load Model 3',
+                    'type': 'load',
+                    'position': {'x': 100, 'y': 250},
+                    'job': {
+                        'name': 'Load Base Model 3',
+                        'type': 'load',
+                        'framework': 'pytorch',
+                        'config': {'model_source': 'huggingface', 'model_name': 'distilbert-base-uncased'}
+                    }
+                },
+                {
+                    'id': 'merge',
+                    'name': 'Merge Models',
+                    'type': 'merge',
+                    'position': {'x': 400, 'y': 150},
+                    'job': {
+                        'name': 'Merge Models (SLERP)',
+                        'type': 'merge',
+                        'framework': 'pytorch',
+                        'config': {
+                            'merge_method': 'slerp',  # slerp, ties, dare, passthrough
+                            'weights': [0.4, 0.4, 0.2],
+                            'base_model': 'model1'
+                        }
+                    }
+                },
+                {
+                    'id': 'eval',
+                    'name': 'Evaluate Merged',
+                    'type': 'evaluate',
+                    'position': {'x': 700, 'y': 150},
+                    'job': {
+                        'name': 'Evaluate Merged Model',
+                        'type': 'evaluate',
+                        'framework': 'pytorch'
+                    }
+                }
+            ],
+            'edges': [
+                {'from': 'model1', 'to': 'merge'},
+                {'from': 'model2', 'to': 'merge'},
+                {'from': 'model3', 'to': 'merge'},
+                {'from': 'merge', 'to': 'eval'}
+            ]
+        },
+        {
+            'id': 'video-processing',
+            'name': 'Video Dataset Processing',
+            'description': 'Index videos, extract frames, generate transcripts, and train classifier',
+            'category': 'video',
+            'nodes': [
+                {
+                    'id': 'index',
+                    'name': 'Index Videos',
+                    'type': 'index',
+                    'position': {'x': 100, 'y': 100},
+                    'job': {
+                        'name': 'Index Video Dataset',
+                        'type': 'index',
+                        'config': {
+                            'source_path': '/data/videos',
+                            'extract_audio': True,
+                            'generate_manifest': True
+                        }
+                    }
+                },
+                {
+                    'id': 'extract-frames',
+                    'name': 'Extract Frames',
+                    'type': 'preprocess',
+                    'position': {'x': 400, 'y': 50},
+                    'job': {
+                        'name': 'Extract Frames',
+                        'type': 'preprocess',
+                        'config': {
+                            'fps': 1,
+                            'format': 'jpg',
+                            'quality': 95
+                        }
+                    }
+                },
+                {
+                    'id': 'transcribe',
+                    'name': 'Generate Transcripts',
+                    'type': 'transcribe',
+                    'position': {'x': 400, 'y': 200},
+                    'job': {
+                        'name': 'Whisper Transcription',
+                        'type': 'transcribe',
+                        'config': {
+                            'model': 'whisper-large-v3',
+                            'language': 'en'
+                        }
+                    }
+                },
+                {
+                    'id': 'train',
+                    'name': 'Train Video Classifier',
+                    'type': 'train',
+                    'position': {'x': 700, 'y': 125},
+                    'job': {
+                        'name': 'VideoMAE Classification',
+                        'type': 'train',
+                        'framework': 'pytorch',
+                        'config': {
+                            'model': 'videomae-base',
+                            'num_frames': 16,
+                            'batch_size': 8,
+                            'epochs': 10
+                        }
+                    }
+                }
+            ],
+            'edges': [
+                {'from': 'index', 'to': 'extract-frames'},
+                {'from': 'index', 'to': 'transcribe'},
+                {'from': 'extract-frames', 'to': 'train'},
+                {'from': 'transcribe', 'to': 'train'}
+            ]
+        },
+        {
+            'id': 'transfer-learning',
+            'name': 'Transfer Learning Pipeline',
+            'description': 'Pre-train on large dataset, then fine-tune on specific task',
+            'category': 'advanced',
+            'nodes': [
+                {
+                    'id': 'pretrain',
+                    'name': 'Pre-training',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 100},
+                    'job': {
+                        'name': 'Pre-train on ImageNet',
+                        'type': 'train',
+                        'framework': 'pytorch',
+                        'config': {
+                            'dataset': 'imagenet-1k',
+                            'epochs': 100,
+                            'lr': 0.1
+                        }
+                    }
+                },
+                {
+                    'id': 'finetune',
+                    'name': 'Fine-tuning',
+                    'type': 'finetune',
+                    'position': {'x': 400, 'y': 100},
+                    'job': {
+                        'name': 'Fine-tune on CIFAR-10',
+                        'type': 'finetune',
+                        'framework': 'pytorch',
+                        'config': {
+                            'dataset': 'cifar10',
+                            'epochs': 20,
+                            'lr': 0.001,
+                            'freeze_layers': True
+                        }
+                    }
+                },
+                {
+                    'id': 'eval',
+                    'name': 'Evaluate',
+                    'type': 'evaluate',
+                    'position': {'x': 700, 'y': 100}
+                }
+            ],
+            'edges': [
+                {'from': 'pretrain', 'to': 'finetune'},
+                {'from': 'finetune', 'to': 'eval'}
+            ]
+        },
+        {
+            'id': 'distillation',
+            'name': 'Knowledge Distillation',
+            'description': 'Train a smaller student model from a larger teacher model',
+            'category': 'optimization',
+            'nodes': [
+                {
+                    'id': 'teacher',
+                    'name': 'Train Teacher',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 100},
+                    'job': {
+                        'name': 'Train Large Teacher Model',
+                        'type': 'train',
+                        'framework': 'pytorch',
+                        'config': {
+                            'model': 'resnet152',
+                            'epochs': 100
+                        }
+                    }
+                },
+                {
+                    'id': 'student',
+                    'name': 'Distill to Student',
+                    'type': 'distill',
+                    'position': {'x': 400, 'y': 100},
+                    'job': {
+                        'name': 'Train Small Student Model',
+                        'type': 'distill',
+                        'framework': 'pytorch',
+                        'config': {
+                            'student_model': 'resnet18',
+                            'temperature': 3.0,
+                            'alpha': 0.7,
+                            'epochs': 50
+                        }
+                    }
+                },
+                {
+                    'id': 'compare',
+                    'name': 'Compare Performance',
+                    'type': 'evaluate',
+                    'position': {'x': 700, 'y': 100}
+                }
+            ],
+            'edges': [
+                {'from': 'teacher', 'to': 'student'},
+                {'from': 'student', 'to': 'compare'}
+            ]
+        },
+        {
+            'id': 'data-augmentation',
+            'name': 'Data Augmentation Pipeline',
+            'description': 'Apply various augmentations and train multiple models',
+            'category': 'preprocessing',
+            'nodes': [
+                {
+                    'id': 'original',
+                    'name': 'Original Data',
+                    'type': 'data',
+                    'position': {'x': 100, 'y': 150}
+                },
+                {
+                    'id': 'aug1',
+                    'name': 'Augmentation 1',
+                    'type': 'augment',
+                    'position': {'x': 300, 'y': 50},
+                    'job': {
+                        'config': {'method': 'mixup'}
+                    }
+                },
+                {
+                    'id': 'aug2',
+                    'name': 'Augmentation 2',
+                    'type': 'augment',
+                    'position': {'x': 300, 'y': 150},
+                    'job': {
+                        'config': {'method': 'cutmix'}
+                    }
+                },
+                {
+                    'id': 'aug3',
+                    'name': 'Augmentation 3',
+                    'type': 'augment',
+                    'position': {'x': 300, 'y': 250},
+                    'job': {
+                        'config': {'method': 'randaugment'}
+                    }
+                },
+                {
+                    'id': 'train',
+                    'name': 'Train with Best Aug',
+                    'type': 'train',
+                    'position': {'x': 500, 'y': 150}
+                }
+            ],
+            'edges': [
+                {'from': 'original', 'to': 'aug1'},
+                {'from': 'original', 'to': 'aug2'},
+                {'from': 'original', 'to': 'aug3'},
+                {'from': 'aug1', 'to': 'train'},
+                {'from': 'aug2', 'to': 'train'},
+                {'from': 'aug3', 'to': 'train'}
+            ]
+        },
+        {
+            'id': 'multimodal-training',
+            'name': 'Multimodal Training (Vision + Text)',
+            'description': 'Train a model on both images and text (CLIP-style)',
+            'category': 'advanced',
+            'nodes': [
+                {
+                    'id': 'image-encoder',
+                    'name': 'Image Encoder',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 50},
+                    'job': {
+                        'name': 'Train Vision Encoder',
+                        'config': {'model': 'vit-base'}
+                    }
+                },
+                {
+                    'id': 'text-encoder',
+                    'name': 'Text Encoder',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 200},
+                    'job': {
+                        'name': 'Train Text Encoder',
+                        'config': {'model': 'bert-base'}
+                    }
+                },
+                {
+                    'id': 'contrastive',
+                    'name': 'Contrastive Learning',
+                    'type': 'train',
+                    'position': {'x': 400, 'y': 125},
+                    'job': {
+                        'name': 'CLIP-style Training',
+                        'config': {
+                            'loss': 'contrastive',
+                            'temperature': 0.07
+                        }
+                    }
+                },
+                {
+                    'id': 'eval',
+                    'name': 'Evaluate',
+                    'type': 'evaluate',
+                    'position': {'x': 700, 'y': 125}
+                }
+            ],
+            'edges': [
+                {'from': 'image-encoder', 'to': 'contrastive'},
+                {'from': 'text-encoder', 'to': 'contrastive'},
+                {'from': 'contrastive', 'to': 'eval'}
+            ]
+        },
+        {
+            'id': 'continual-learning',
+            'name': 'Continual Learning Pipeline',
+            'description': 'Train on multiple tasks sequentially without forgetting',
+            'category': 'advanced',
+            'nodes': [
+                {
+                    'id': 'task1',
+                    'name': 'Task 1',
+                    'type': 'train',
+                    'position': {'x': 100, 'y': 125},
+                    'job': {
+                        'name': 'Train on Task 1',
+                        'config': {'dataset': 'task1'}
+                    }
+                },
+                {
+                    'id': 'task2',
+                    'name': 'Task 2 + Replay',
+                    'type': 'train',
+                    'position': {'x': 350, 'y': 125},
+                    'job': {
+                        'name': 'Train on Task 2 with Replay',
+                        'config': {
+                            'dataset': 'task2',
+                            'replay_buffer': True,
+                            'ewc_lambda': 0.4
+                        }
+                    }
+                },
+                {
+                    'id': 'task3',
+                    'name': 'Task 3 + Replay',
+                    'type': 'train',
+                    'position': {'x': 600, 'y': 125},
+                    'job': {
+                        'name': 'Train on Task 3 with Replay',
+                        'config': {
+                            'dataset': 'task3',
+                            'replay_buffer': True,
+                            'ewc_lambda': 0.4
+                        }
+                    }
+                },
+                {
+                    'id': 'eval-all',
+                    'name': 'Evaluate All Tasks',
+                    'type': 'evaluate',
+                    'position': {'x': 850, 'y': 125}
+                }
+            ],
+            'edges': [
+                {'from': 'task1', 'to': 'task2'},
+                {'from': 'task2', 'to': 'task3'},
+                {'from': 'task3', 'to': 'eval-all'}
+            ]
+        },
+        {
+            'id': 'automl',
+            'name': 'AutoML Pipeline',
+            'description': 'Automatically search for best architecture and hyperparameters',
+            'category': 'optimization',
+            'nodes': [
+                {
+                    'id': 'search-space',
+                    'name': 'Define Search Space',
+                    'type': 'config',
+                    'position': {'x': 100, 'y': 125}
+                },
+                {
+                    'id': 'nas',
+                    'name': 'Neural Architecture Search',
+                    'type': 'search',
+                    'position': {'x': 350, 'y': 50},
+                    'job': {
+                        'config': {
+                            'method': 'darts',
+                            'search_epochs': 50
+                        }
+                    }
+                },
+                {
+                    'id': 'hpo',
+                    'name': 'Hyperparameter Optimization',
+                    'type': 'optimize',
+                    'position': {'x': 350, 'y': 200},
+                    'job': {
+                        'config': {
+                            'method': 'optuna',
+                            'n_trials': 100
+                        }
+                    }
+                },
+                {
+                    'id': 'best-model',
+                    'name': 'Train Best Model',
+                    'type': 'train',
+                    'position': {'x': 600, 'y': 125}
+                }
+            ],
+            'edges': [
+                {'from': 'search-space', 'to': 'nas'},
+                {'from': 'search-space', 'to': 'hpo'},
+                {'from': 'nas', 'to': 'best-model'},
+                {'from': 'hpo', 'to': 'best-model'}
             ]
         }
     ]
