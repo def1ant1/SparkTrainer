@@ -61,8 +61,15 @@ export default function ProfilePage() {
     try {
       const res = await fetch('/api/user/dashboard');
       if (res.ok) {
-        const data = await res.json();
-        setDashboard(data);
+        const text = await res.text();
+        if (text) {
+          try {
+            const data = JSON.parse(text);
+            setDashboard(data);
+          } catch (parseError) {
+            console.error('Failed to parse dashboard JSON:', parseError);
+          }
+        }
       }
     } catch (e) {
       console.error('Failed to load dashboard:', e);
@@ -73,8 +80,15 @@ export default function ProfilePage() {
     try {
       const res = await fetch('/api/config/persistent');
       if (res.ok) {
-        const data = await res.json();
-        setPersistentConfig(data);
+        const text = await res.text();
+        if (text) {
+          try {
+            const data = JSON.parse(text);
+            setPersistentConfig(data);
+          } catch (parseError) {
+            console.error('Failed to parse config JSON:', parseError);
+          }
+        }
       }
     } catch (e) {
       console.error('Failed to load persistent config:', e);
