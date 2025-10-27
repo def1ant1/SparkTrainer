@@ -1,5 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
+// Toast hook for notifications
+const useToast = () => {
+  return {
+    push: (msg) => {
+      const { type = 'info', title, message } = msg;
+      const colors = { success: '#10b981', error: '#ef4444', info: '#3b82f6', warning: '#f59e0b' };
+      const color = colors[type] || colors.info;
+      const toast = document.createElement('div');
+      toast.style.cssText = `position:fixed;top:20px;right:20px;background:${color};color:white;padding:12px 20px;border-radius:8px;z-index:9999;box-shadow:0 4px 6px rgba(0,0,0,0.2)`;
+      toast.textContent = title + (message ? ': ' + message : '');
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+  };
+};
+
 export function ModelsPage({ api, onOpen, onCompare }) {
   const [items, setItems] = useState([]);
   const [view, setView] = useState('grid');
@@ -12,6 +28,7 @@ export function ModelsPage({ api, onOpen, onCompare }) {
   const [size, setSize] = useState('');
   const [license, setLicense] = useState('');
   const [tag, setTag] = useState('');
+  const toast = useToast();
 
   const load = async () => {
     const params = new URLSearchParams();
@@ -34,21 +51,47 @@ export function ModelsPage({ api, onOpen, onCompare }) {
   const selectedIds = Object.keys(sel).filter(k => sel[k]);
 
   const bulkDelete = async () => {
-    if (!selectedIds.length) return;
-    if (!confirm(`Delete ${selectedIds.length} models? This cannot be undone.`)) return;
-    await api.bulkDeleteModels(selectedIds);
-    setSel({});
-    load();
+    if (!selectedIds.length) {
+      toast.push({ type: 'warning', title: 'No models selected' });
+      return;
+    }
+    if (!confirm(`Delete ${selectedIds.length} model${selectedIds.length > 1 ? 's' : ''}? This cannot be undone.`)) return;
+    try {
+      await api.bulkDeleteModels(selectedIds);
+      setSel({});
+      load();
+      toast.push({ type: 'success', title: `Deleted ${selectedIds.length} model${selectedIds.length > 1 ? 's' : ''}` });
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Delete failed', message: e.message });
+    }
+  };
+
+  const deleteModel = async (modelId) => {
+    if (!confirm('Delete this model? This cannot be undone.')) return;
+    try {
+      await api.deleteModel(modelId);
+      load();
+      toast.push({ type: 'success', title: 'Model deleted' });
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Delete failed', message: e.message });
+    }
   };
 
   const bulkExport = async () => {
-    if (!selectedIds.length) return;
+    if (!selectedIds.length) {
+      toast.push({ type: 'warning', title: 'No models selected' });
+      return;
+    }
     const url = api.exportModelsUrl(selectedIds);
     window.open(url, '_blank');
+    toast.push({ type: 'info', title: `Exporting ${selectedIds.length} model${selectedIds.length > 1 ? 's' : ''}` });
   };
 
   const bulkCompare = () => {
-    if (selectedIds.length < 2) { alert('Select at least 2 models to compare'); return; }
+    if (selectedIds.length < 2) {
+      toast.push({ type: 'warning', title: 'Select at least 2 models', message: 'Comparison requires multiple models' });
+      return;
+    }
     onCompare(selectedIds);
   };
 
@@ -93,7 +136,7 @@ export function ModelsPage({ api, onOpen, onCompare }) {
       {view==='grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {items.map(m => (
-            <ModelCard key={m.id} m={m} selected={!!sel[m.id]} onSelect={v=>setSel(s=>({...s, [m.id]: v}))} onOpen={()=>onOpen(m.id)} />
+            <ModelCard key={m.id} m={m} selected={!!sel[m.id]} onSelect={v=>setSel(s=>({...s, [m.id]: v}))} onOpen={()=>onOpen(m.id)} onDelete={()=>deleteModel(m.id)} />
           ))}
         </div>
       ) : (
@@ -116,7 +159,10 @@ export function ModelsPage({ api, onOpen, onCompare }) {
                 <td className="px-3 py-2">{m.architecture || '-'}</td>
                 <td className="px-3 py-2 text-sm">{m.metrics?.eval_accuracy!=null ? `Acc ${m.metrics.eval_accuracy.toFixed(3)}` : '-'}</td>
                 <td className="px-3 py-2 text-sm">{m.created ? new Date(m.created).toLocaleString() : '-'}</td>
-                <td className="px-3 py-2 text-right"><button onClick={()=>onOpen(m.id)} className="text-blue-600 hover:text-blue-800">Open</button></td>
+                <td className="px-3 py-2 text-right">
+                  <button onClick={()=>onOpen(m.id)} className="text-primary hover:brightness-110 mr-3">Open</button>
+                  <button onClick={()=>deleteModel(m.id)} className="text-danger hover:brightness-110">Delete</button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -126,17 +172,17 @@ export function ModelsPage({ api, onOpen, onCompare }) {
   );
 }
 
-export function ModelCard({ m, selected, onSelect, onOpen }) {
+export function ModelCard({ m, selected, onSelect, onOpen, onDelete }) {
   const size = (m.size_bytes||0);
   const fmtSize = size >= (1<<30) ? (size/(1<<30)).toFixed(1)+' GB' : size >= (1<<20) ? (size/(1<<20)).toFixed(1)+' MB' : size+' B';
   return (
-    <div className="border border-border rounded-lg bg-surface shadow-sm p-4 flex flex-col gap-2">
+    <div className="border border-border rounded-lg bg-surface shadow-sm p-4 flex flex-col gap-2 group relative hover:shadow-lg transition-shadow">
       <div className="flex justify-between items-start">
-        <div>
-          <div className="font-semibold text-lg">{m.name}</div>
+        <div className="flex-1 min-w-0 pr-2">
+          <div className="font-semibold text-lg truncate">{m.name}</div>
           <div className="text-xs text-text/70">{m.framework} {m.architecture ? `• ${m.architecture}` : ''} {m.size_category ? `• ${m.size_category}` : ''}</div>
         </div>
-        <input type="checkbox" checked={selected} onChange={e=>onSelect(e.target.checked)} />
+        <input type="checkbox" checked={selected} onChange={e=>onSelect(e.target.checked)} className="shrink-0" />
       </div>
       {m.card_excerpt && <div className="text-xs text-text/80 line-clamp-3">{m.card_excerpt}</div>}
       <div className="text-sm">
@@ -151,8 +197,11 @@ export function ModelCard({ m, selected, onSelect, onOpen }) {
         </div>
       )}
       {m.popularity && <div className="text-[10px] text-text/60">Views {m.popularity.views||0} • Exports {m.popularity.exports||0}</div>}
-      <div className="flex justify-end">
-        <button onClick={onOpen} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">Open</button>
+      <div className="flex justify-between gap-2">
+        <button onClick={onOpen} className="flex-1 px-3 py-2 border border-border rounded bg-surface hover:bg-muted">Open</button>
+        <button onClick={(e)=>{e.stopPropagation(); onDelete();}} className="px-3 py-2 text-xs bg-danger/10 text-danger border border-danger/30 rounded hover:bg-danger/20">
+          Delete
+        </button>
       </div>
     </div>
   );
@@ -167,6 +216,8 @@ export function ModelDetail({ id, api, onBack }) {
   const [adapters, setAdapters] = useState([]);
   const [mergeName, setMergeName] = useState('');
   const [merging, setMerging] = useState(false);
+  const toast = useToast();
+
   const load = async () => {
     const d = await api.getModel(id);
     setInfo(d);
@@ -177,16 +228,27 @@ export function ModelDetail({ id, api, onBack }) {
   useEffect(()=>{ load(); }, [id]);
 
   const saveMeta = async () => {
-    const payload = {
-      tags: tags.split(',').map(s=>s.trim()).filter(Boolean),
-      custom: (()=>{ try { return JSON.parse(kv||'{}'); } catch { return {}; } })(),
-    };
-    await api.updateModelMetadata(id, payload);
-    load();
+    try {
+      const payload = {
+        tags: tags.split(',').map(s=>s.trim()).filter(Boolean),
+        custom: (()=>{ try { return JSON.parse(kv||'{}'); } catch { return {}; } })(),
+      };
+      await api.updateModelMetadata(id, payload);
+      load();
+      toast.push({ type: 'success', title: 'Metadata saved' });
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Save failed', message: e.message });
+    }
   };
+
   const saveCard = async () => {
-    await api.updateModelCard(id, { content: card });
-    load();
+    try {
+      await api.updateModelCard(id, { content: card });
+      load();
+      toast.push({ type: 'success', title: 'Card saved' });
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Save failed', message: e.message });
+    }
   };
   if (!info) return <div>Loading...</div>;
   const cfg = info.config || {};
@@ -294,7 +356,21 @@ export function ModelDetail({ id, api, onBack }) {
               <div className="flex gap-2">
                 <button disabled={merging} className={`px-3 py-2 rounded ${merging?'bg-muted text-text/60':'bg-primary text-on-primary hover:brightness-110'}`} onClick={async()=>{
                   setMerging(true);
-                  try { const res = await api.mergeModelAdapter(id, mergeName); if (res && !res.error) { alert('Merged successfully.'); setMergeName(''); const d = await api.getModel(id); setInfo(d); } else { alert('Merge failed: '+(res.error||res.detail||'unknown')); } } finally { setMerging(false); }
+                  try {
+                    const res = await api.mergeModelAdapter(id, mergeName);
+                    if (res && !res.error) {
+                      toast.push({ type: 'success', title: 'Adapter merged successfully' });
+                      setMergeName('');
+                      const d = await api.getModel(id);
+                      setInfo(d);
+                    } else {
+                      toast.push({ type: 'error', title: 'Merge failed', message: res.error || res.detail || 'Unknown error' });
+                    }
+                  } catch (e) {
+                    toast.push({ type: 'error', title: 'Merge failed', message: e.message });
+                  } finally {
+                    setMerging(false);
+                  }
                 }}>Confirm Merge</button>
                 <button className="px-3 py-2 border border-border rounded" onClick={()=>setMergeName('')}>Cancel</button>
               </div>
@@ -350,8 +426,8 @@ function MetricLine({ title, data }){
     <div>
       <div className="text-sm mb-1">{title}</div>
       <svg width={width} height={height} className="w-full">
-        <rect x={0} y={0} width={width} height={height} fill="transparent" stroke="#eee" />
-        <path d={path} stroke="#2563eb" strokeWidth={2} fill="none" />
+        <rect x={0} y={0} width={width} height={height} fill="transparent" className="stroke-border" strokeWidth="1" />
+        <path d={path} className="stroke-primary" strokeWidth={2} fill="none" />
       </svg>
     </div>
   );
@@ -376,13 +452,19 @@ function ModelEvals({ id }){
   const [name, setName] = useState('');
   const [metrics, setMetrics] = useState('{}');
   const [notes, setNotes] = useState('');
+  const toast = useToast();
+
   const load = async () => { try{ const r = await fetch(`/api/models/${encodeURIComponent(id)}/evals`); const j = await r.json(); setItems(j.items||[]); }catch{} };
   useEffect(()=>{ load(); }, [id]);
+
   const save = async () => {
     try{
       await fetch(`/api/models/${encodeURIComponent(id)}/evals`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, metrics: JSON.parse(metrics||'{}'), notes })});
       setName(''); setMetrics('{}'); setNotes(''); load();
-    } catch { alert('Failed to save'); }
+      toast.push({ type: 'success', title: 'Evaluation saved' });
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Save failed', message: e.message });
+    }
   };
   return (
     <div className="bg-surface p-4 rounded border border-border space-y-3">

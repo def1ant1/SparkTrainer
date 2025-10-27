@@ -1,5 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
+// Toast hook for notifications
+const useToast = () => {
+  return {
+    push: (msg) => {
+      const { type = 'info', title, message } = msg;
+      const colors = { success: '#10b981', error: '#ef4444', info: '#3b82f6', warning: '#f59e0b' };
+      const color = colors[type] || colors.info;
+      const toast = document.createElement('div');
+      toast.style.cssText = `position:fixed;top:20px;right:20px;background:${color};color:white;padding:12px 20px;border-radius:8px;z-index:9999;box-shadow:0 4px 6px rgba(0,0,0,0.2)`;
+      toast.textContent = title + (message ? ': ' + message : '');
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+  };
+};
+
 // Simple DAG editor for pipelines
 export default function PipelinesPage(){
   const [pipelines, setPipelines] = useState([]);
@@ -7,6 +23,8 @@ export default function PipelinesPage(){
   const [selNode, setSelNode] = useState(null);
   const [edgeFrom, setEdgeFrom] = useState('');
   const [edgeTo, setEdgeTo] = useState('');
+  const [showList, setShowList] = useState(false);
+  const toast = useToast();
 
   const load = async () => {
     try{ const r = await fetch('/api/pipelines'); const j = await r.json(); setPipelines(j.items||[]);}catch{}
@@ -31,24 +49,73 @@ export default function PipelinesPage(){
   };
 
   const save = async () => {
-    const payload = { id: current.id || undefined, name: current.name||`pipeline-${Date.now()}`, nodes: current.nodes, edges: current.edges };
-    const r = await fetch('/api/pipelines', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-    if (!r.ok) { alert(await r.text()); return; }
-    const j = await r.json();
-    alert(`Saved pipeline ${j.id}`);
-    load();
+    try {
+      const payload = { id: current.id || undefined, name: current.name||`pipeline-${Date.now()}`, nodes: current.nodes, edges: current.edges };
+      const r = await fetch('/api/pipelines', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      if (!r.ok) {
+        const err = await r.text();
+        toast.push({ type: 'error', title: 'Save failed', message: err });
+        return;
+      }
+      const j = await r.json();
+      setCurrent(c => ({...c, id: j.id}));
+      toast.push({ type: 'success', title: 'Pipeline saved', message: `ID: ${j.id}` });
+      load();
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Save failed', message: String(e.message || e) });
+    }
   };
 
   const run = async () => {
-    if (!current.id){ alert('Load or save the pipeline first to get an id'); return; }
-    const r = await fetch(`/api/pipelines/${encodeURIComponent(current.id)}/run`, { method:'POST' });
-    const j = await r.json();
-    if (j.error) alert(j.error); else alert('Pipeline started');
+    if (!current.id){
+      toast.push({ type: 'warning', title: 'Cannot run', message: 'Save the pipeline first' });
+      return;
+    }
+    if (!confirm(`Run pipeline "${current.name}"? This will create jobs for all nodes.`)) return;
+    try {
+      const r = await fetch(`/api/pipelines/${encodeURIComponent(current.id)}/run`, { method:'POST' });
+      const j = await r.json();
+      if (j.error) {
+        toast.push({ type: 'error', title: 'Run failed', message: j.error });
+      } else {
+        toast.push({ type: 'success', title: 'Pipeline started', message: `${(current.nodes || []).length} jobs created` });
+      }
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Run failed', message: String(e.message || e) });
+    }
+  };
+
+  const deletePipeline = async (id) => {
+    if (!confirm('Delete this pipeline permanently?')) return;
+    try {
+      const r = await fetch(`/api/pipelines/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!r.ok) {
+        const err = await r.json();
+        throw new Error(err.error || 'Delete failed');
+      }
+      if (current.id === id) {
+        setCurrent({ id: null, name: '', nodes: [], edges: [] });
+        setSelNode(null);
+      }
+      toast.push({ type: 'success', title: 'Pipeline deleted' });
+      load();
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Delete failed', message: String(e.message || e) });
+    }
+  };
+
+  const createNew = () => {
+    setCurrent({ id: null, name: '', nodes: [], edges: [] });
+    setSelNode(null);
+    setShowList(false);
+    toast.push({ type: 'info', title: 'New pipeline created' });
   };
 
   const loadPipeline = (p) => {
     setCurrent({ id: p.id, name: p.name||'', nodes: p.nodes||[], edges: p.edges||[] });
     setSelNode(null);
+    setShowList(false);
+    toast.push({ type: 'info', title: 'Pipeline loaded', message: p.name || p.id });
   };
 
   const template = (key) => {
@@ -76,15 +143,52 @@ export default function PipelinesPage(){
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Pipelines</h1>
         <div className="flex gap-2 text-sm">
-          <select className="border border-border rounded px-3 py-2 bg-surface" onChange={e=>{ const id=e.target.value; if (!id) return; const p=pipelines.find(x=>x.id===id); if(p) loadPipeline(p);} }>
-            <option value="">Load saved…</option>
-            {pipelines.map(p => (<option key={p.id} value={p.id}>{p.name||p.id}</option>))}
-          </select>
-          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={()=>template('sweep')}>Template: HPO Sweep</button>
-          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={()=>template('cv')}>Template: Cross‑Val</button>
+          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={createNew}>New</button>
+          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={() => setShowList(!showList)}>
+            {showList ? 'Hide List' : `Show List (${pipelines.length})`}
+          </button>
+          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={()=>template('sweep')}>Template: HPO</button>
+          <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={()=>template('cv')}>Template: CV</button>
           <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={()=>template('ensemble')}>Template: Ensemble</button>
         </div>
       </div>
+
+      {showList && (
+        <div className="bg-surface border border-border rounded-lg p-4">
+          <h2 className="text-lg font-semibold mb-3">Saved Pipelines</h2>
+          {pipelines.length === 0 ? (
+            <div className="text-text/60 text-sm">No saved pipelines</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {pipelines.map(p => (
+                <div key={p.id} className="border border-border rounded p-3 flex items-center justify-between hover:bg-muted group">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold truncate">{p.name || 'Unnamed'}</div>
+                    <div className="text-xs text-text/60">
+                      {(p.nodes || []).length} nodes • {(p.edges || []).length} edges
+                    </div>
+                    <div className="text-xs text-text/50">{p.id.slice(0, 8)}</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => loadPipeline(p)}
+                      className="px-2 py-1 text-xs bg-primary/10 text-primary border border-primary/30 rounded hover:bg-primary/20"
+                    >
+                      Load
+                    </button>
+                    <button
+                      onClick={() => deletePipeline(p.id)}
+                      className="px-2 py-1 text-xs bg-danger/10 text-danger border border-danger/30 rounded hover:bg-danger/20"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* Editor */}
@@ -115,8 +219,11 @@ export default function PipelinesPage(){
               </div>
             </div>
           </div>
-          <div className="flex justify-between pt-2">
+          <div className="flex justify-between pt-2 gap-2">
             <button className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted" onClick={save}>Save</button>
+            {current.id && (
+              <button className="px-3 py-2 border border-danger/30 rounded bg-danger/10 text-danger hover:bg-danger/20 text-sm" onClick={() => deletePipeline(current.id)}>Delete</button>
+            )}
             <button className="px-3 py-2 rounded bg-primary text-on-primary hover:brightness-110" onClick={run}>Run</button>
           </div>
         </div>
@@ -146,11 +253,11 @@ function Canvas({ nodes, edges, onDrag, onSelect }){
           const a = nodes.find(n=>n.id===e.from); const b = nodes.find(n=>n.id===e.to);
           if (!a||!b) return null;
           const x1=a.x+60, y1=a.y+20, x2=b.x, y2=b.y+20; const mx=(x1+x2)/2; const d=`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
-          return (<path key={i} d={d} stroke="#94a3b8" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />);
+          return (<path key={i} d={d} stroke="currentColor" className="text-text/40" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />);
         })}
         <defs>
           <marker id="arrow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />
+            <path d="M 0 0 L 10 5 L 0 10 z" className="fill-text/40" />
           </marker>
         </defs>
       </svg>

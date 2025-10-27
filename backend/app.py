@@ -1616,6 +1616,51 @@ def cancel_job(job_id):
     
     return jsonify(job)
 
+@app.route('/api/jobs/<job_id>', methods=['DELETE'])
+def delete_job(job_id):
+    """Delete a job (only if completed, failed, or cancelled)"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+
+    job = jobs[job_id]
+    if job['status'] in ['running', 'queued', 'paused']:
+        return jsonify({'error': 'Cannot delete running or queued jobs. Cancel first.'}), 400
+
+    # Remove from jobs dict
+    del jobs[job_id]
+    save_jobs()
+
+    # Optionally clean up job files (logs, checkpoints) - keeping them for now
+    # model_dir = os.path.join(MODELS_DIR, job_id)
+    # log_file = os.path.join(LOGS_DIR, f'{job_id}.log')
+
+    return jsonify({'message': 'Job deleted successfully'}), 200
+
+@app.route('/api/jobs/<job_id>/restart', methods=['POST'])
+def restart_job(job_id):
+    """Restart a failed or cancelled job"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+
+    job = jobs[job_id]
+    if job['status'] not in ['failed', 'cancelled']:
+        return jsonify({'error': 'Can only restart failed or cancelled jobs'}), 400
+
+    # Reset job status and clear error info
+    job['status'] = 'queued'
+    job['started'] = None
+    job['finished'] = None
+    job['error'] = None
+    job['progress'] = 0
+    job['eta_seconds'] = None
+    save_jobs()
+
+    # Re-enqueue the job
+    from threading import Thread
+    Thread(target=run_training_job, args=(job_id,), daemon=True).start()
+
+    return jsonify(job)
+
 def run_training_job(job_id):
     """Execute the training job"""
     job = jobs[job_id]
@@ -2087,12 +2132,23 @@ def list_datasets():
     return jsonify(items)
 
 
-@app.route('/api/datasets/<name>', methods=['GET'])
+@app.route('/api/datasets/<name>', methods=['GET', 'DELETE'])
 def dataset_detail(name):
     name = _safe_name(name)
     base = _dataset_dir(name)
     if not os.path.isdir(base):
         return jsonify({'error': 'Dataset not found'}), 404
+
+    if request.method == 'DELETE':
+        # Delete the entire dataset directory
+        import shutil
+        try:
+            shutil.rmtree(base)
+            return jsonify({'status': 'ok', 'message': 'Dataset deleted successfully'})
+        except Exception as e:
+            return jsonify({'error': f'Failed to delete dataset: {str(e)}'}), 500
+
+    # GET
     versions = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
     versions.sort(key=lambda d: os.path.getmtime(os.path.join(base, d)), reverse=True)
     out_vers = []
@@ -2965,6 +3021,256 @@ def datasets_sync():
         return jsonify({'status': 'ok', 'provider': provider, 'direction': direction, 'output': out.decode(errors='ignore')})
     except subprocess.CalledProcessError as e:
         return jsonify({'status': 'error', 'provider': provider, 'direction': direction, 'rc': e.returncode, 'output': (e.output or b'').decode(errors='ignore')}), 500
+
+
+# ================= Video Dataset Processing =================
+
+# Background job tracking for video indexing
+_video_index_jobs = {}  # job_id -> {status, progress, manifest_path, etc}
+
+@app.route('/api/datasets/index', methods=['POST'])
+def dataset_index_video():
+    """
+    Index a video dataset directory.
+
+    Creates a background job that:
+    1. Scans directory for video files
+    2. Extracts metadata (duration, fps, resolution, etc.)
+    3. Generates JSONL manifest file
+
+    POST body: {
+        name: dataset name,
+        source_path: path to video directory,
+        version: optional version name,
+        recursive: scan subdirectories (default: true),
+        extract_metadata: extract full metadata (default: true),
+        extensions: list of video extensions (default: [mp4, avi, mov, mkv, webm])
+    }
+    """
+    data = request.json or {}
+    name = _safe_name(data.get('name') or '')
+    source_path = data.get('source_path', '')
+    version = _safe_name(data.get('version') or datetime.now().strftime('%Y%m%d-%H%M%S'))
+    recursive = data.get('recursive', True)
+    extract_metadata = data.get('extract_metadata', True)
+    extensions = data.get('extensions')
+
+    if not name:
+        return jsonify({'error': 'Dataset name required'}), 400
+
+    if not source_path or not os.path.isdir(source_path):
+        return jsonify({'error': 'Valid source_path directory required'}), 400
+
+    # Check if ffmpeg is available
+    try:
+        from backend.utils import video as video_utils
+        if not video_utils.check_ffmpeg_installed():
+            return jsonify({'error': 'FFmpeg not installed. Please install ffmpeg and ffprobe.'}), 400
+    except ImportError:
+        return jsonify({'error': 'Video utils not available'}), 500
+
+    # Create dataset version directory
+    dataset_dir = _dataset_version_dir(name, version)
+    os.makedirs(dataset_dir, exist_ok=True)
+
+    # Create job
+    job_id = str(uuid.uuid4())
+    manifest_path = os.path.join(dataset_dir, 'manifest.jsonl')
+
+    job = {
+        'id': job_id,
+        'name': name,
+        'version': version,
+        'source_path': source_path,
+        'manifest_path': manifest_path,
+        'status': 'running',
+        'progress': 0,
+        'total_videos': 0,
+        'processed': 0,
+        'created': datetime.now().isoformat(),
+        'log': []
+    }
+
+    _video_index_jobs[job_id] = job
+
+    # Start background indexing
+    def index_worker():
+        try:
+            job['log'].append(f"Scanning {source_path}...")
+
+            # Scan for videos
+            videos = video_utils.scan_video_directory(
+                source_path,
+                extensions=extensions,
+                recursive=recursive
+            )
+
+            job['total_videos'] = len(videos)
+            job['log'].append(f"Found {len(videos)} videos")
+
+            if len(videos) == 0:
+                job['status'] = 'completed'
+                job['log'].append("No videos found")
+                return
+
+            # Build manifest
+            def progress_callback(current, total):
+                job['processed'] = current
+                job['progress'] = int((current / total) * 100) if total > 0 else 0
+
+            video_utils.build_video_manifest(
+                videos,
+                manifest_path,
+                extract_metadata=extract_metadata,
+                progress_callback=progress_callback
+            )
+
+            # Get statistics
+            stats = video_utils.get_video_stats(manifest_path)
+            job['stats'] = stats
+            job['status'] = 'completed'
+            job['progress'] = 100
+            job['log'].append(f"Completed: {stats['total_videos']} videos indexed")
+
+            # Save metadata
+            meta_path = os.path.join(dataset_dir, 'metadata.json')
+            with open(meta_path, 'w') as f:
+                json.dump({
+                    'name': name,
+                    'version': version,
+                    'type': 'video_classification',
+                    'source_path': source_path,
+                    'created': job['created'],
+                    'stats': stats
+                }, f, indent=2)
+
+        except Exception as e:
+            job['status'] = 'failed'
+            job['error'] = str(e)
+            job['log'].append(f"Error: {str(e)}")
+
+    # Start in background thread
+    thread = threading.Thread(target=index_worker, daemon=True)
+    thread.start()
+
+    return jsonify({
+        'status': 'ok',
+        'job_id': job_id,
+        'message': 'Video indexing started in background'
+    }), 202
+
+
+@app.route('/api/datasets/index/<job_id>', methods=['GET'])
+def get_index_job_status(job_id):
+    """Get status of video indexing job"""
+    job = _video_index_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    return jsonify(job)
+
+
+@app.route('/api/datasets/<name>/process', methods=['POST'])
+def dataset_process_video(name):
+    """
+    Process videos in a dataset (extract frames, transcribe audio).
+
+    POST body: {
+        version: dataset version,
+        num_frames: frames to extract per video (default: 16),
+        extract_audio: extract audio tracks (default: false),
+        transcribe: transcribe with Whisper (default: false),
+        whisper_model: Whisper model size (default: 'base'),
+        max_videos: limit processing to first N videos (optional)
+    }
+    """
+    name = _safe_name(name)
+    data = request.json or {}
+    version = _safe_name(data.get('version') or '')
+    num_frames = data.get('num_frames', 16)
+    extract_audio_flag = data.get('extract_audio', False)
+    transcribe = data.get('transcribe', False)
+    whisper_model = data.get('whisper_model', 'base')
+    max_videos = data.get('max_videos')
+
+    dataset_dir = _dataset_version_dir(name, version if version else None)
+    manifest_path = os.path.join(dataset_dir, 'manifest.jsonl')
+
+    if not os.path.exists(manifest_path):
+        return jsonify({'error': 'No manifest found. Run indexing first.'}), 404
+
+    # Load videos from manifest
+    videos = []
+    with open(manifest_path, 'r') as f:
+        for idx, line in enumerate(f):
+            if max_videos and idx >= max_videos:
+                break
+            videos.append(json.loads(line))
+
+    # Create processing job
+    job_id = str(uuid.uuid4())
+    job = {
+        'id': job_id,
+        'name': name,
+        'version': version,
+        'status': 'running',
+        'progress': 0,
+        'total_videos': len(videos),
+        'processed': 0,
+        'created': datetime.now().isoformat(),
+        'log': []
+    }
+
+    _video_index_jobs[job_id] = job
+
+    def process_worker():
+        try:
+            from backend.utils import video as video_utils
+
+            processed_manifest = os.path.join(dataset_dir, 'processed_manifest.jsonl')
+
+            with open(processed_manifest, 'w') as out_f:
+                for idx, video in enumerate(videos):
+                    try:
+                        video_path = video['path']
+                        output_dir = os.path.join(dataset_dir, 'processed', f'video_{idx:06d}')
+
+                        result = video_utils.process_video_for_training(
+                            video_path,
+                            output_dir,
+                            num_frames=num_frames,
+                            extract_audio=extract_audio_flag,
+                            transcribe=transcribe,
+                            whisper_model=whisper_model
+                        )
+
+                        # Merge with original video metadata
+                        processed_record = {**video, **result, 'output_dir': output_dir}
+                        out_f.write(json.dumps(processed_record) + '\n')
+
+                        job['processed'] = idx + 1
+                        job['progress'] = int(((idx + 1) / len(videos)) * 100)
+
+                    except Exception as e:
+                        job['log'].append(f"Error processing {video.get('filename', 'unknown')}: {str(e)}")
+
+            job['status'] = 'completed'
+            job['progress'] = 100
+            job['log'].append(f"Processed {len(videos)} videos")
+
+        except Exception as e:
+            job['status'] = 'failed'
+            job['error'] = str(e)
+            job['log'].append(f"Processing failed: {str(e)}")
+
+    thread = threading.Thread(target=process_worker, daemon=True)
+    thread.start()
+
+    return jsonify({
+        'status': 'ok',
+        'job_id': job_id,
+        'message': 'Video processing started in background'
+    }), 202
 
 
 # ================= HPO studies persistence =================
@@ -4264,6 +4570,142 @@ def user_preferences():
         _save_json(USERS_PATH, users)
 
     return jsonify(users[user['id']].get('preferences', {}))
+
+@app.route('/api/user/settings', methods=['GET', 'PUT'])
+def user_settings():
+    """Get or update user settings (includes API keys, preferences, etc.)"""
+    user = _get_current_user()
+    if not user:
+        # Return default settings for unauthenticated users
+        return jsonify({
+            'name': '',
+            'email': '',
+            'organization': '',
+            'default_framework': 'pytorch',
+            'auto_save_interval': 300,
+            'notification_enabled': True,
+            'theme': 'dark'
+        })
+
+    users = _load_json(USERS_PATH, {})
+    user_id = user['id']
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        # Store settings
+        if user_id not in users:
+            users[user_id] = {'id': user_id, 'created': datetime.now().isoformat()}
+
+        users[user_id]['settings'] = data
+        users[user_id]['updated'] = datetime.now().isoformat()
+        _save_json(USERS_PATH, users)
+
+    return jsonify(users.get(user_id, {}).get('settings', {
+        'name': '',
+        'email': '',
+        'organization': '',
+        'default_framework': 'pytorch',
+        'auto_save_interval': 300,
+        'notification_enabled': True,
+        'theme': 'dark'
+    }))
+
+@app.route('/api/huggingface/download-model', methods=['POST'])
+def huggingface_download_model():
+    """Download a model from HuggingFace Hub"""
+    data = request.json or {}
+    model_id = data.get('model_id')
+    token = data.get('token')
+
+    if not model_id:
+        return jsonify({'error': 'model_id required'}), 400
+
+    try:
+        # Create a background job to download the model
+        job_id = str(uuid.uuid4())
+
+        def download_model_task():
+            try:
+                from transformers import AutoModel, AutoTokenizer
+                import os
+
+                # Set HF token if provided
+                if token:
+                    os.environ['HF_TOKEN'] = token
+
+                # Download to models directory
+                model_path = os.path.join(MODELS_DIR, model_id.replace('/', '_'))
+                os.makedirs(model_path, exist_ok=True)
+
+                # Download model and tokenizer
+                AutoModel.from_pretrained(model_id, cache_dir=model_path)
+                AutoTokenizer.from_pretrained(model_id, cache_dir=model_path)
+
+                return {'status': 'completed', 'path': model_path}
+            except Exception as e:
+                return {'status': 'failed', 'error': str(e)}
+
+        # Start download in background
+        from threading import Thread
+        Thread(target=download_model_task, daemon=True).start()
+
+        return jsonify({
+            'status': 'ok',
+            'job_id': job_id,
+            'message': f'Downloading {model_id} in background'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/huggingface/download-dataset', methods=['POST'])
+def huggingface_download_dataset():
+    """Download a dataset from HuggingFace Hub"""
+    data = request.json or {}
+    dataset_id = data.get('dataset_id')
+    token = data.get('token')
+
+    if not dataset_id:
+        return jsonify({'error': 'dataset_id required'}), 400
+
+    try:
+        # Create a background job to download the dataset
+        job_id = str(uuid.uuid4())
+
+        def download_dataset_task():
+            try:
+                from datasets import load_dataset
+                import os
+
+                # Set HF token if provided
+                if token:
+                    os.environ['HF_TOKEN'] = token
+
+                # Download to datasets directory
+                dataset_name = dataset_id.replace('/', '_')
+                dataset_path = os.path.join(DATASETS_DIR, dataset_name)
+                os.makedirs(dataset_path, exist_ok=True)
+
+                # Download dataset
+                ds = load_dataset(dataset_id, cache_dir=dataset_path)
+
+                # Save to disk
+                ds.save_to_disk(os.path.join(dataset_path, 'v1'))
+
+                return {'status': 'completed', 'path': dataset_path}
+            except Exception as e:
+                return {'status': 'failed', 'error': str(e)}
+
+        # Start download in background
+        from threading import Thread
+        Thread(target=download_dataset_task, daemon=True).start()
+
+        return jsonify({
+            'status': 'ok',
+            'job_id': job_id,
+            'message': f'Downloading {dataset_id} in background'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ---------------- Teams ----------------

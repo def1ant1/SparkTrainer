@@ -10,6 +10,7 @@ import { ModelsPage, ModelDetail, ModelCompare } from './components/Models';
 import { DatasetsPage } from './components/Datasets';
 import ExperimentsPage from './components/Experiments';
 import PipelinesPage from './components/Pipelines';
+import ProfilePage from './components/Profile';
 import Labeling from './components/Labeling';
 
 // API Service
@@ -738,6 +739,7 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
   const [groupByProject, setGroupByProject] = useState(false);
   const [experimentFilter, setExperimentFilter] = useState('');
   const [groupByExperiment, setGroupByExperiment] = useState(false);
+  const [selectedJobs, setSelectedJobs] = useState({});
   
   useEffect(() => {
     loadJobs();
@@ -766,6 +768,114 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
     }
   };
 
+  const handleDeleteJob = async (jobId) => {
+    if (confirm('Delete this job permanently? This will remove it from the list but keep logs/checkpoints.')) {
+      try {
+        const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Delete failed');
+        }
+        if (selectedJob && selectedJob.id === jobId) {
+          setSelectedJob(null);
+        }
+        loadJobs();
+        toast.push({ type: 'success', title: 'Job deleted' });
+      } catch (error) {
+        toast.push({ type: 'error', title: 'Delete failed', message: String(error.message || error) });
+      }
+    }
+  };
+
+  const handleRestartJob = async (jobId) => {
+    if (confirm('Restart this job? It will be re-queued and run from scratch.')) {
+      try {
+        const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}/restart`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Restart failed');
+        }
+        loadJobs();
+        toast.push({ type: 'success', title: 'Job restarted', message: 'Job has been re-queued' });
+      } catch (error) {
+        toast.push({ type: 'error', title: 'Restart failed', message: String(error.message || error) });
+      }
+    }
+  };
+
+  const selectedJobIds = Object.keys(selectedJobs).filter(k => selectedJobs[k]);
+
+  const toggleAllJobs = (filtered) => {
+    if (selectedJobIds.length === filtered.length && filtered.length > 0) {
+      setSelectedJobs({});
+    } else {
+      setSelectedJobs(Object.fromEntries(filtered.map(j => [j.id, true])));
+    }
+  };
+
+  const bulkCancelJobs = async () => {
+    const jobsToCanel = selectedJobIds.filter(id => {
+      const job = jobs.find(j => j.id === id);
+      return job && job.status === 'running';
+    });
+
+    if (jobsToCanel.length === 0) {
+      toast.push({ type: 'warning', title: 'No running jobs selected' });
+      return;
+    }
+
+    if (!confirm(`Cancel ${jobsToCanel.length} running job${jobsToCanel.length > 1 ? 's' : ''}?`)) return;
+
+    let success = 0, failed = 0;
+    for (const jobId of jobsToCanel) {
+      try {
+        await api.cancelJob(jobId);
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+    setSelectedJobs({});
+    loadJobs();
+    toast.push({
+      type: success > 0 ? 'success' : 'error',
+      title: `Cancelled ${success} job${success !== 1 ? 's' : ''}`,
+      message: failed > 0 ? `${failed} failed` : undefined
+    });
+  };
+
+  const bulkDeleteJobs = async () => {
+    const jobsToDelete = selectedJobIds.filter(id => {
+      const job = jobs.find(j => j.id === id);
+      return job && ['completed', 'failed', 'cancelled'].includes(job.status);
+    });
+
+    if (jobsToDelete.length === 0) {
+      toast.push({ type: 'warning', title: 'No deletable jobs selected', message: 'Only completed, failed, or cancelled jobs can be deleted' });
+      return;
+    }
+
+    if (!confirm(`Delete ${jobsToDelete.length} job${jobsToDelete.length > 1 ? 's' : ''}? This cannot be undone.`)) return;
+
+    let success = 0, failed = 0;
+    for (const jobId of jobsToDelete) {
+      try {
+        const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+        if (res.ok) success++;
+        else failed++;
+      } catch {
+        failed++;
+      }
+    }
+    setSelectedJobs({});
+    loadJobs();
+    toast.push({
+      type: success > 0 ? 'success' : 'error',
+      title: `Deleted ${success} job${success !== 1 ? 's' : ''}`,
+      message: failed > 0 ? `${failed} failed` : undefined
+    });
+  };
+
   useEffect(() => {
     if (!selectedJob) { setCheckpoints([]); return; }
     (async () => {
@@ -784,13 +894,15 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
   
   const getStatusColor = (status) => {
     const colors = {
-      'queued': 'bg-yellow-100 text-yellow-800',
-      'running': 'bg-blue-100 text-blue-800',
-      'completed': 'bg-green-100 text-green-800',
-      'failed': 'bg-red-100 text-red-800',
-      'cancelled': 'bg-gray-100 text-gray-800'
+      'queued': 'bg-warning/10 text-warning border border-warning/30',
+      'running': 'bg-primary/10 text-primary border border-primary/30',
+      'completed': 'bg-success/10 text-success border border-success/30',
+      'failed': 'bg-danger/10 text-danger border border-danger/30',
+      'cancelled': 'bg-text/10 text-text/70 border border-text/20',
+      'paused': 'bg-secondary/10 text-secondary border border-secondary/30',
+      'blocked': 'bg-text/10 text-text/60 border border-text/20'
     };
-    return colors[status] || 'bg-gray-100 text-gray-800';
+    return colors[status] || 'bg-text/10 text-text/70 border border-text/20';
   };
   
   return (
@@ -798,34 +910,53 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Training Jobs</h1>
         <div className="flex gap-2">
+          {selectedJobIds.length > 0 && (
+            <>
+              <span className="px-3 py-2 bg-muted rounded border border-border text-sm">
+                {selectedJobIds.length} selected
+              </span>
+              <button
+                onClick={bulkCancelJobs}
+                className="px-3 py-2 bg-warning/10 text-warning border border-warning/30 rounded hover:bg-warning/20"
+              >
+                Cancel Selected
+              </button>
+              <button
+                onClick={bulkDeleteJobs}
+                className="px-3 py-2 bg-danger/10 text-danger border border-danger/30 rounded hover:bg-danger/20"
+              >
+                Delete Selected
+              </button>
+            </>
+          )}
           <button
             onClick={() => onNavigate('create')}
-            className="bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
+            className="bg-primary text-on-primary py-2 px-4 rounded-lg hover:brightness-110 transition flex items-center gap-2"
           >
             <Plus size={16} />
             New Job
           </button>
           <button
             onClick={() => onNavigate('dashboard')}
-            className="text-blue-600 hover:text-blue-800"
+            className="text-primary hover:brightness-110"
           >
             ← Dashboard
           </button>
         </div>
       </div>
       <div className="bg-surface rounded-lg border border-border p-4 grid grid-cols-1 md:grid-cols-7 gap-3">
-        <input className="border rounded px-3 py-2" placeholder="Search jobs" value={q} onChange={e=>setQ(e.target.value)} />
-        <select className="border rounded px-3 py-2" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
+        <input className="border border-border rounded px-3 py-2 bg-surface text-text" placeholder="Search jobs" value={q} onChange={e=>setQ(e.target.value)} />
+        <select className="border border-border rounded px-3 py-2 bg-surface text-text" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
           <option value="">All Statuses</option>
           {['queued','blocked','running','paused','completed','failed','cancelled'].map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select className="border rounded px-3 py-2" value={frameworkFilter} onChange={e=>setFrameworkFilter(e.target.value)}>
+        <select className="border border-border rounded px-3 py-2 bg-surface text-text" value={frameworkFilter} onChange={e=>setFrameworkFilter(e.target.value)}>
           <option value="">All Frameworks</option>
           {['pytorch','huggingface','tensorflow'].map(f => <option key={f} value={f}>{f}</option>)}
         </select>
-        <input className="border rounded px-3 py-2" placeholder="Filter by user" value={userFilter} onChange={e=>setUserFilter(e.target.value)} />
-        <input className="border rounded px-3 py-2" placeholder="Filter by experiment" value={experimentFilter} onChange={e=>setExperimentFilter(e.target.value)} />
-        <div className="flex items-center gap-4 text-sm text-gray-700">
+        <input className="border border-border rounded px-3 py-2 bg-surface text-text" placeholder="Filter by user" value={userFilter} onChange={e=>setUserFilter(e.target.value)} />
+        <input className="border border-border rounded px-3 py-2 bg-surface text-text" placeholder="Filter by experiment" value={experimentFilter} onChange={e=>setExperimentFilter(e.target.value)} />
+        <div className="flex items-center gap-4 text-sm text-text col-span-2">
           <label className="flex items-center gap-2"><input type="checkbox" checked={groupByProject} onChange={e=>setGroupByProject(e.target.checked)} /> Group by project</label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={groupByExperiment} onChange={e=>setGroupByExperiment(e.target.checked)} /> Group by experiment</label>
         </div>
@@ -835,6 +966,26 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
         <table className="w-full">
           <thead className="bg-muted border-b border-border">
             <tr>
+              <th className="px-3 py-3 text-left">
+                <input
+                  type="checkbox"
+                  checked={selectedJobIds.length > 0 && jobs.filter(j =>
+                    (!q || j.name.toLowerCase().includes(q.toLowerCase())) &&
+                    (!statusFilter || j.status===statusFilter) &&
+                    (!frameworkFilter || j.framework===frameworkFilter) &&
+                    (!userFilter || ((j.config && j.config.user && String(j.config.user).toLowerCase().includes(userFilter.toLowerCase())) || (j.user && String(j.user).toLowerCase().includes(userFilter.toLowerCase())))) &&
+                    (!experimentFilter || ((j.experiment && j.experiment.name && String(j.experiment.name).toLowerCase().includes(experimentFilter.toLowerCase()))))
+                  ).every(j => selectedJobs[j.id])}
+                  onChange={(e) => toggleAllJobs(jobs.filter(j =>
+                    (!q || j.name.toLowerCase().includes(q.toLowerCase())) &&
+                    (!statusFilter || j.status===statusFilter) &&
+                    (!frameworkFilter || j.framework===frameworkFilter) &&
+                    (!userFilter || ((j.config && j.config.user && String(j.config.user).toLowerCase().includes(userFilter.toLowerCase())) || (j.user && String(j.user).toLowerCase().includes(userFilter.toLowerCase())))) &&
+                    (!experimentFilter || ((j.experiment && j.experiment.name && String(j.experiment.name).toLowerCase().includes(experimentFilter.toLowerCase()))))
+                  ))}
+                  className="w-4 h-4"
+                />
+              </th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Name</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Type</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Framework</th>
@@ -857,13 +1008,21 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
               if (!groupByProject && !groupByExperiment) {
                 return filtered.map((job) => (
                    <tr key={job.id} className="hover:bg-muted">
+                  <td className="px-3 py-4">
+                    <input
+                      type="checkbox"
+                      checked={!!selectedJobs[job.id]}
+                      onChange={(e) => setSelectedJobs(prev => ({ ...prev, [job.id]: e.target.checked }))}
+                      className="w-4 h-4"
+                    />
+                  </td>
                   <td className="px-6 py-4 text-sm font-medium">{job.name}</td>
                   <td className="px-6 py-4 text-sm text-text/80 capitalize">{job.type}</td>
                   <td className="px-6 py-4 text-sm text-text/80 capitalize">{job.framework}</td>
                   <td className="px-6 py-4 text-sm text-text/80">
                     {(() => {
                       const g = job.gpu;
-                      if (!g) return <span className="text-gray-400">auto</span>;
+                      if (!g) return <span className="text-text/60">auto</span>;
                       if (g.type === 'gpu') {
                         if (g.gpu_index != null) return `GPU ${g.gpu_index}`;
                         if (g.gpu_uuid) return `GPU ${String(g.gpu_uuid).slice(0,8)}…`;
@@ -894,16 +1053,13 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
                       <td className="px-6 py-4 text-sm">
                         <button
                           onClick={() => setSelectedJob(job)}
-                          className="text-blue-600 hover:text-blue-800 mr-3"
+                          className="text-primary hover:brightness-110 mr-3"
                         >
                           View
                         </button>
                         {job.framework==='huggingface' && job.config && job.config.hpo && job.config.hpo.enabled && (
-                          <button onClick={()=> onOpenHpo && onOpenHpo(job.id)} className="text-purple-600 hover:text-purple-800 mr-3">HPO</button>
+                          <button onClick={()=> onOpenHpo && onOpenHpo(job.id)} className="text-secondary hover:brightness-110 mr-3">HPO</button>
                         )}
-                    {job.framework==='huggingface' && job.config && job.config.hpo && job.config.hpo.enabled && (
-                      <button onClick={()=> onOpenHpo && onOpenHpo(job.id)} className="text-purple-600 hover:text-purple-800 mr-3">HPO</button>
-                    )}
                     {job.status === 'running' && (
                       <>
                         <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/pause`,{method:'POST'}); loadJobs(); toast.push({type:'info', title:'Job paused'});}} className="text-warning hover:brightness-110 mr-3">Pause</button>
@@ -911,8 +1067,13 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
                         <button onClick={() => handleCancelJob(job.id)} className="text-danger hover:brightness-110 mr-3">Cancel</button>
                       </>
                     )}
-                    <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/clone`,{method:'POST'}); loadJobs(); toast.push({type:'success', title:'Job cloned'});}} className="hover:brightness-110 mr-3">Clone</button>
-                    <button onClick={async()=>{const p=prompt('Set priority (number):', job.priority||0); if(p!=null){ await fetch(`${API_BASE}/jobs/${job.id}/priority`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({priority: parseInt(p)})}); loadJobs(); toast.push({type:'success', title:'Priority updated'});}}} className="text-secondary hover:brightness-110">Priority</button>
+                    {(job.status === 'failed' || job.status === 'cancelled') && (
+                      <button onClick={() => handleRestartJob(job.id)} className="text-success hover:brightness-110 mr-3">Restart</button>
+                    )}
+                    {(job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') && (
+                      <button onClick={() => handleDeleteJob(job.id)} className="text-danger hover:brightness-110 mr-3">Delete</button>
+                    )}
+                    <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/clone`,{method:'POST'}); loadJobs(); toast.push({type:'success', title:'Job cloned'});}} className="text-text/70 hover:text-text mr-3">Clone</button>
                   </td>
                 </tr>
               ));
@@ -927,8 +1088,8 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
               return keys.flatMap((k) => {
                 const rows = [];
                 rows.push(
-                  <tr key={`g-${k}`} className="bg-gray-100">
-                    <td colSpan={7} className="px-6 py-2 text-xs font-semibold text-gray-700">{k} <span className="text-gray-500 font-normal">({groups[k].length})</span></td>
+                  <tr key={`g-${k}`} className="bg-muted">
+                    <td colSpan={8} className="px-6 py-2 text-xs font-semibold text-text">{k} <span className="text-text/60 font-normal">({groups[k].length})</span></td>
                   </tr>
                 );
                 groups[k].forEach(job => {
@@ -940,7 +1101,7 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
                   <td className="px-6 py-4 text-sm text-text/80">
                         {(() => {
                           const g = job.gpu;
-                          if (!g) return <span className="text-gray-400">auto</span>;
+                          if (!g) return <span className="text-text/60">auto</span>;
                           if (g.type === 'gpu') {
                             if (g.gpu_index != null) return `GPU ${g.gpu_index}`;
                             if (g.gpu_uuid) return `GPU ${String(g.gpu_uuid).slice(0,8)}…`;
@@ -970,19 +1131,27 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
                   <td className="px-6 py-4 text-sm">
                         <button
                           onClick={() => setSelectedJob(job)}
-                          className="text-blue-600 hover:text-blue-800 mr-3"
+                          className="text-primary hover:brightness-110 mr-3"
                         >
                           View
                         </button>
+                        {job.framework==='huggingface' && job.config && job.config.hpo && job.config.hpo.enabled && (
+                          <button onClick={()=> onOpenHpo && onOpenHpo(job.id)} className="text-secondary hover:brightness-110 mr-3">HPO</button>
+                        )}
                         {job.status === 'running' && (
                           <>
-                            <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/pause`,{method:'POST'}); loadJobs();}} className="text-yellow-600 hover:text-yellow-800 mr-3">Pause</button>
-                            <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/resume`,{method:'POST'}); loadJobs();}} className="text-green-600 hover:text-green-800 mr-3">Resume</button>
-                            <button onClick={() => handleCancelJob(job.id)} className="text-red-600 hover:text-red-800 mr-3">Cancel</button>
+                            <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/pause`,{method:'POST'}); loadJobs(); toast.push({type:'info', title:'Job paused'});}} className="text-warning hover:brightness-110 mr-3">Pause</button>
+                            <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/resume`,{method:'POST'}); loadJobs(); toast.push({type:'success', title:'Job resumed'});}} className="text-success hover:brightness-110 mr-3">Resume</button>
+                            <button onClick={() => handleCancelJob(job.id)} className="text-danger hover:brightness-110 mr-3">Cancel</button>
                           </>
                         )}
-                    <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/clone`,{method:'POST'}); loadJobs(); toast.push({type:'success', title:'Job cloned'});}} className="hover:brightness-110 mr-3">Clone</button>
-                        <button onClick={async()=>{const p=prompt('Set priority (number):', job.priority||0); if(p!=null){ await fetch(`${API_BASE}/jobs/${job.id}/priority`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({priority: parseInt(p)})}); loadJobs();}}} className="text-purple-700 hover:text-purple-900">Priority</button>
+                    {(job.status === 'failed' || job.status === 'cancelled') && (
+                      <button onClick={() => handleRestartJob(job.id)} className="text-success hover:brightness-110 mr-3">Restart</button>
+                    )}
+                    {(job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') && (
+                      <button onClick={() => handleDeleteJob(job.id)} className="text-danger hover:brightness-110 mr-3">Delete</button>
+                    )}
+                    <button onClick={async()=>{await fetch(`${API_BASE}/jobs/${job.id}/clone`,{method:'POST'}); loadJobs(); toast.push({type:'success', title:'Job cloned'});}} className="text-text/70 hover:text-text mr-3">Clone</button>
                       </td>
                     </tr>
                   );
@@ -999,12 +1168,29 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
           <div className="bg-surface border border-border rounded-lg max-w-3xl w-full max-h-[80vh] overflow-auto p-6">
             <div className="flex justify-between items-start mb-4">
               <h2 className="text-2xl font-bold">{selectedJob.name}</h2>
-              <button
-                onClick={() => setSelectedJob(null)}
-                className="text-text/60 hover:text-text"
-              >
-                ✕
-              </button>
+              <div className="flex gap-2 items-center">
+                {selectedJob.status === 'running' && (
+                  <button onClick={() => handleCancelJob(selectedJob.id)} className="px-3 py-1 text-sm bg-danger/10 text-danger border border-danger/30 rounded hover:bg-danger/20">
+                    Cancel
+                  </button>
+                )}
+                {(selectedJob.status === 'failed' || selectedJob.status === 'cancelled') && (
+                  <button onClick={() => handleRestartJob(selectedJob.id)} className="px-3 py-1 text-sm bg-success/10 text-success border border-success/30 rounded hover:bg-success/20">
+                    Restart
+                  </button>
+                )}
+                {(selectedJob.status === 'completed' || selectedJob.status === 'failed' || selectedJob.status === 'cancelled') && (
+                  <button onClick={() => handleDeleteJob(selectedJob.id)} className="px-3 py-1 text-sm bg-danger/10 text-danger border border-danger/30 rounded hover:bg-danger/20">
+                    Delete
+                  </button>
+                )}
+                <button
+                  onClick={() => setSelectedJob(null)}
+                  className="text-text/60 hover:text-text text-xl"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
             
             <div className="space-y-4">
@@ -1029,7 +1215,7 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
                   <div className="col-span-2">
                     <div className="text-sm text-text/70">Progress</div>
                     <div className="w-full bg-muted rounded h-3">
-                      <div className="bg-blue-600 h-3 rounded" style={{width:`${Math.min(100, Math.max(0, selectedJob.progress))}%`}} />
+                      <div className="bg-primary h-3 rounded" style={{width:`${Math.min(100, Math.max(0, selectedJob.progress))}%`}} />
                     </div>
                     <div className="text-xs text-text/70 mt-1">{Math.round(selectedJob.progress)}% {selectedJob.eta_seconds!=null && `(ETA ${Math.ceil(selectedJob.eta_seconds/60)}m)`}</div>
                   </div>
@@ -1334,6 +1520,11 @@ export default function App() {
         {currentPage === 'pipelines' && (
           <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
             <PipelinesPage />
+          </PageWithSidebars>
+        )}
+        {currentPage === 'profile' && (
+          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
+            <ProfilePage />
           </PageWithSidebars>
         )}
           </PageTransition>
@@ -2257,6 +2448,7 @@ function Sidebar({ collapsed, setCollapsed, current, onNavigate }){
     { key: 'models', label: 'Models', icon: <BarChart3 size={18} /> },
     { key: 'datasets', label: 'Datasets', icon: <Database size={18} /> },
     { key: 'labeling', label: 'Labeling', icon: <List size={18} /> },
+    { key: 'profile', label: 'Profile', icon: <User size={18} /> },
     { key: 'builder', label: 'Builder', icon: <Monitor size={18} /> },
     { key: 'wizard', label: 'Quick Start', icon: <List size={18} /> },
     { key: 'admin', label: 'Admin', icon: <Settings size={18} /> },
