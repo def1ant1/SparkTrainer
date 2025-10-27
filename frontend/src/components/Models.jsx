@@ -573,12 +573,34 @@ export function ModelTemplatesView({ api, toast }) {
     try {
       const res = await fetch('/api/models/templates');
       if (res.ok) {
-        const data = await res.json();
-        setTemplates(data);
+        const text = await res.text();
+        if (!text) {
+          console.error('Empty response from templates endpoint');
+          setTemplates({ templates: {}, categories: {} });
+          toast.push({ type: 'error', title: 'Empty response from server' });
+          return;
+        }
+        try {
+          const data = JSON.parse(text);
+          setTemplates(data);
+        } catch (parseError) {
+          console.error('JSON parse error:', parseError, 'Response:', text);
+          setTemplates({ templates: {}, categories: {} });
+          toast.push({ type: 'error', title: 'Invalid response format' });
+        }
       } else {
-        toast.push({ type: 'error', title: 'Failed to load templates' });
+        try {
+          const errorData = await res.json();
+          toast.push({ type: 'error', title: 'Failed to load templates', message: errorData.error });
+        } catch {
+          toast.push({ type: 'error', title: 'Failed to load templates' });
+        }
+        // Set empty data to prevent crashes
+        setTemplates({ templates: {}, categories: {} });
       }
     } catch (e) {
+      console.error('Network error loading templates:', e);
+      setTemplates({ templates: {}, categories: {} });
       toast.push({ type: 'error', title: 'Error loading templates', message: e.message });
     }
   };

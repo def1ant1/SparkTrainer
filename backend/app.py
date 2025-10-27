@@ -26,6 +26,20 @@ except Exception:
 app = Flask(__name__)
 CORS(app)
 
+# Global error handlers to ensure JSON responses
+@app.errorhandler(404)
+def not_found_error(error):
+    return jsonify({'error': 'Endpoint not found', 'status': 404}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Internal server error', 'status': 500, 'message': str(error)}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Handle all unhandled exceptions
+    return jsonify({'error': 'Unexpected error', 'message': str(e)}), 500
+
 # Configuration
 # Use project-relative paths by default, with environment variable overrides.
 BASE_DIR = os.environ.get(
@@ -4804,13 +4818,64 @@ def model_templates():
 
     try:
         import yaml
+    except ImportError:
+        return jsonify({
+            'error': 'PyYAML not installed',
+            'templates': {},
+            'categories': {}
+        }), 500
+
+    try:
+        if not os.path.exists(templates_path):
+            return jsonify({
+                'error': f'Templates file not found at {templates_path}',
+                'templates': {},
+                'categories': {}
+            }), 404
+
         with open(templates_path, 'r') as f:
             templates_data = yaml.safe_load(f)
+
+        if templates_data is None:
+            return jsonify({
+                'error': 'Templates file is empty',
+                'templates': {},
+                'categories': {}
+            }), 500
+
+        # Ensure the data has the expected structure
+        if not isinstance(templates_data, dict):
+            return jsonify({
+                'error': 'Invalid templates file format',
+                'templates': {},
+                'categories': {}
+            }), 500
+
+        # Provide defaults if keys are missing
+        if 'templates' not in templates_data:
+            templates_data['templates'] = {}
+        if 'categories' not in templates_data:
+            templates_data['categories'] = {}
+
         return jsonify(templates_data)
     except FileNotFoundError:
-        return jsonify({'error': 'Templates file not found'}), 404
+        return jsonify({
+            'error': 'Templates file not found',
+            'templates': {},
+            'categories': {}
+        }), 404
+    except yaml.YAMLError as e:
+        return jsonify({
+            'error': f'YAML parsing error: {str(e)}',
+            'templates': {},
+            'categories': {}
+        }), 500
     except Exception as e:
-        return jsonify({'error': f'Failed to load templates: {str(e)}'}), 500
+        return jsonify({
+            'error': f'Failed to load templates: {str(e)}',
+            'templates': {},
+            'categories': {}
+        }), 500
 
 
 @app.route('/api/huggingface/download-model', methods=['POST'])
