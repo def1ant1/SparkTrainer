@@ -17,7 +17,7 @@ const useToast = () => {
 };
 
 export default function ProfilePage() {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('general');
   const [settings, setSettings] = useState({
     name: '',
     email: '',
@@ -30,8 +30,6 @@ export default function ProfilePage() {
     notification_enabled: true,
     theme: 'dark'
   });
-  const [dashboard, setDashboard] = useState(null);
-  const [persistentConfig, setPersistentConfig] = useState(null);
   const [hfModels, setHfModels] = useState([]);
   const [hfDatasets, setHfDatasets] = useState([]);
   const [hfSearchModel, setHfSearchModel] = useState('');
@@ -41,8 +39,6 @@ export default function ProfilePage() {
 
   useEffect(() => {
     loadSettings();
-    loadDashboard();
-    loadPersistentConfig();
   }, []);
 
   const loadSettings = async () => {
@@ -54,48 +50,6 @@ export default function ProfilePage() {
       }
     } catch (e) {
       console.error('Failed to load settings:', e);
-    }
-  };
-
-  const loadDashboard = async () => {
-    try {
-      const res = await fetch('/api/user/dashboard');
-      if (res.ok) {
-        const data = await res.json();
-        setDashboard(data);
-      }
-    } catch (e) {
-      console.error('Failed to load dashboard:', e);
-    }
-  };
-
-  const loadPersistentConfig = async () => {
-    try {
-      const res = await fetch('/api/config/persistent');
-      if (res.ok) {
-        const data = await res.json();
-        setPersistentConfig(data);
-      }
-    } catch (e) {
-      console.error('Failed to load persistent config:', e);
-    }
-  };
-
-  const savePersistentConfig = async () => {
-    try {
-      const res = await fetch('/api/config/persistent', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(persistentConfig)
-      });
-      if (res.ok) {
-        toast.push({ type: 'success', title: 'Persistent config saved' });
-      } else {
-        const err = await res.json();
-        toast.push({ type: 'error', title: 'Save failed', message: err.error || 'Unknown error' });
-      }
-    } catch (e) {
-      toast.push({ type: 'error', title: 'Save failed', message: e.message });
     }
   };
 
@@ -230,7 +184,7 @@ export default function ProfilePage() {
       {/* Tabs */}
       <div className="border-b border-border">
         <div className="flex gap-4">
-          {['dashboard', 'general', 'api-keys', 'huggingface', 'preferences'].map(tab => (
+          {['general', 'api-keys', 'huggingface', 'preferences'].map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -245,218 +199,6 @@ export default function ProfilePage() {
           ))}
         </div>
       </div>
-
-      {/* Dashboard Tab */}
-      {activeTab === 'dashboard' && (
-        <div className="space-y-6">
-          {/* Statistics Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-surface border border-border rounded-lg p-6">
-              <div className="text-sm font-medium text-text/60 mb-2">Datasets</div>
-              <div className="text-3xl font-bold">{dashboard?.datasets_count || 0}</div>
-              <div className="text-xs text-text/50 mt-2">Available datasets</div>
-            </div>
-
-            <div className="bg-surface border border-border rounded-lg p-6">
-              <div className="text-sm font-medium text-text/60 mb-2">Models</div>
-              <div className="text-3xl font-bold">{dashboard?.models_count || 0}</div>
-              <div className="text-xs text-text/50 mt-2">Trained models</div>
-            </div>
-
-            <div className="bg-surface border border-border rounded-lg p-6">
-              <div className="text-sm font-medium text-text/60 mb-2">Total Runs</div>
-              <div className="text-3xl font-bold">{dashboard?.job_stats?.total || 0}</div>
-              <div className="text-xs text-text/50 mt-2">
-                {dashboard?.job_stats?.running || 0} running, {dashboard?.job_stats?.queued || 0} queued
-              </div>
-            </div>
-          </div>
-
-          {/* Job Statistics */}
-          <div className="bg-surface border border-border rounded-lg p-6">
-            <h2 className="text-xl font-semibold mb-4">Job Statistics</h2>
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-              {dashboard?.job_stats && Object.entries(dashboard.job_stats).map(([key, value]) => (
-                <div key={key}>
-                  <div className="text-2xl font-bold">{value}</div>
-                  <div className="text-xs text-text/60 capitalize">{key}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Environment Summary */}
-          <div className="bg-surface border border-border rounded-lg p-6">
-            <h2 className="text-xl font-semibold mb-4">Environment Summary</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Software Environment */}
-              <div>
-                <h3 className="text-sm font-semibold text-text/70 mb-3">Software</h3>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-text/60">Python:</span>
-                    <span className="font-mono">{dashboard?.environment?.python_version || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-text/60">PyTorch:</span>
-                    <span className="font-mono">{dashboard?.environment?.pytorch_version || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-text/60">CUDA:</span>
-                    <span className="font-mono">
-                      {dashboard?.environment?.cuda_available ? dashboard?.environment?.cuda_version : 'Not available'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Hardware Summary */}
-              <div>
-                <h3 className="text-sm font-semibold text-text/70 mb-3">Hardware</h3>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-text/60">CPUs:</span>
-                    <span className="font-mono">{dashboard?.environment?.cpu_count || 0}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-text/60">GPUs:</span>
-                    <span className="font-mono">{dashboard?.environment?.gpu_count || 0}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-text/60">Memory:</span>
-                    <span className="font-mono">{dashboard?.environment?.memory_total_gb || 0} GB</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* GPU Details */}
-            {dashboard?.system?.gpus && dashboard.system.gpus.length > 0 && (
-              <div className="mt-6">
-                <h3 className="text-sm font-semibold text-text/70 mb-3">GPU Details</h3>
-                <div className="space-y-2">
-                  {dashboard.system.gpus.map((gpu, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-3 bg-muted rounded border border-border">
-                      <div>
-                        <div className="font-medium">{gpu.name || `GPU ${idx}`}</div>
-                        <div className="text-xs text-text/60">
-                          {(gpu.memory_used_mib / 1024).toFixed(1)} GB / {(gpu.memory_total_mib / 1024).toFixed(1)} GB
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-sm font-mono">{gpu.utilization || 0}%</div>
-                        <div className="text-xs text-text/60">Utilization</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* System Resources */}
-            {dashboard?.system?.memory && (
-              <div className="mt-6">
-                <h3 className="text-sm font-semibold text-text/70 mb-3">System Resources</h3>
-                <div className="space-y-3">
-                  <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span>Memory Usage</span>
-                      <span className="font-mono">{dashboard.system.memory.used_pct}%</span>
-                    </div>
-                    <div className="w-full bg-border rounded-full h-2">
-                      <div
-                        className="bg-primary h-2 rounded-full transition-all"
-                        style={{ width: `${dashboard.system.memory.used_pct}%` }}
-                      />
-                    </div>
-                    <div className="text-xs text-text/60 mt-1">
-                      {dashboard.system.memory.used_mib} MB / {dashboard.system.memory.total_mib} MB
-                    </div>
-                  </div>
-
-                  {dashboard.system.cpu?.load_avg && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-text/60">Load Average:</span>
-                      <span className="font-mono">
-                        {dashboard.system.cpu.load_avg.map(l => l.toFixed(2)).join(', ')}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Recent Runs */}
-          <div className="bg-surface border border-border rounded-lg p-6">
-            <h2 className="text-xl font-semibold mb-4">Recent Runs</h2>
-            {dashboard?.recent_jobs && dashboard.recent_jobs.length > 0 ? (
-              <div className="space-y-2">
-                {dashboard.recent_jobs.map(job => (
-                  <div key={job.id} className="flex items-center justify-between p-3 bg-muted rounded border border-border hover:bg-muted/80">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{job.name}</div>
-                      <div className="text-xs text-text/60">
-                        {new Date(job.created).toLocaleString()}
-                      </div>
-                    </div>
-                    <div className="ml-4">
-                      <span className={`px-2 py-1 text-xs rounded ${
-                        job.status === 'completed' ? 'bg-success/10 text-success border border-success/30' :
-                        job.status === 'running' ? 'bg-primary/10 text-primary border border-primary/30' :
-                        job.status === 'failed' ? 'bg-error/10 text-error border border-error/30' :
-                        job.status === 'queued' ? 'bg-warning/10 text-warning border border-warning/30' :
-                        'bg-muted text-text/60 border border-border'
-                      }`}>
-                        {job.status}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-text/60">
-                No recent runs
-              </div>
-            )}
-          </div>
-
-          {/* Persistent Config */}
-          <div className="bg-surface border border-border rounded-lg p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Persistent Configuration</h2>
-              <button
-                onClick={savePersistentConfig}
-                className="px-3 py-1 text-sm bg-primary text-on-primary rounded hover:brightness-110"
-              >
-                Save Config
-              </button>
-            </div>
-            <div className="text-xs text-text/60 mb-3">
-              Stored at: ~/.spark_trainer/config.json
-            </div>
-            <div className="space-y-4">
-              {persistentConfig && (
-                <div>
-                  <label className="block text-sm font-medium mb-2">Default Framework</label>
-                  <select
-                    className="w-full border border-border rounded px-3 py-2 bg-surface"
-                    value={persistentConfig.defaults?.framework || 'pytorch'}
-                    onChange={e => setPersistentConfig({
-                      ...persistentConfig,
-                      defaults: { ...persistentConfig.defaults, framework: e.target.value }
-                    })}
-                  >
-                    <option value="pytorch">PyTorch</option>
-                    <option value="huggingface">HuggingFace Transformers</option>
-                    <option value="tensorflow">TensorFlow</option>
-                  </select>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* General Settings Tab */}
       {activeTab === 'general' && (
