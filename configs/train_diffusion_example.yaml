@@ -1,0 +1,54 @@
+# Example training configuration for Diffusion/Video Generation models
+
+train:
+  # Model configuration
+  model_name: stabilityai/stable-video-diffusion-img2vid
+  model_type: diffusion
+  pretrained: true
+
+  # Data configuration
+  manifest_path: data/processed/manifest_v1.jsonl
+  val_manifest_path: null
+  batch_size: 4  # Smaller batch for video diffusion
+  num_workers: 4
+
+  # Training hyperparameters
+  learning_rate: 1.0e-5
+  num_epochs: 10
+  warmup_steps: 1000
+  gradient_accumulation_steps: 2
+  max_grad_norm: 1.0
+
+  # Optimization
+  optimizer: adamw
+  weight_decay: 0.01
+  scheduler: cosine
+
+  # Distributed training
+  use_accelerate: true
+  use_deepspeed: true
+  deepspeed_config: configs/deepspeed_zero2.json
+  mixed_precision: bf16
+
+  # Logging and checkpointing
+  output_dir: runs/svd_experiment
+  logging_steps: 10
+  eval_steps: 500
+  save_steps: 1000
+  save_total_limit: 3
+
+  # Video sampling strategy
+  clip_sampling: random  # random, uniform, center
+  clip_length: 16  # Frames per clip
+  clip_stride: 2  # Sample every 2nd frame
+
+  # Resume training
+  resume_from_checkpoint: null
+
+  # Seed
+  seed: 42
+
+# Global settings
+log_dir: null
+gpu_validation: true
+ffmpeg_validation: true
