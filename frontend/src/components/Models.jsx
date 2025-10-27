@@ -17,6 +17,7 @@ const useToast = () => {
 };
 
 export function ModelsPage({ api, onOpen, onCompare }) {
+  const [mode, setMode] = useState('models'); // 'models' or 'templates'
   const [items, setItems] = useState([]);
   const [view, setView] = useState('grid');
   const [q, setQ] = useState('');
@@ -100,12 +101,36 @@ export function ModelsPage({ api, onOpen, onCompare }) {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Models</h1>
         <div className="flex gap-2">
-          <button onClick={()=>setView(view==='grid'?'list':'grid')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">{view==='grid'?'List View':'Grid View'}</button>
-          <button onClick={bulkCompare} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">Compare</button>
-          <button onClick={bulkExport} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">Export</button>
-          <button onClick={bulkDelete} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted text-danger">Delete</button>
+          <div className="flex border border-border rounded overflow-hidden">
+            <button
+              onClick={() => setMode('models')}
+              className={`px-4 py-2 ${mode === 'models' ? 'bg-primary text-on-primary' : 'bg-surface hover:bg-muted'}`}
+            >
+              My Models
+            </button>
+            <button
+              onClick={() => setMode('templates')}
+              className={`px-4 py-2 ${mode === 'templates' ? 'bg-primary text-on-primary' : 'bg-surface hover:bg-muted'}`}
+            >
+              Templates
+            </button>
+          </div>
+          {mode === 'models' && (
+            <>
+              <button onClick={()=>setView(view==='grid'?'list':'grid')} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">{view==='grid'?'List View':'Grid View'}</button>
+              <button onClick={bulkCompare} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">Compare</button>
+              <button onClick={bulkExport} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted">Export</button>
+              <button onClick={bulkDelete} className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted text-danger">Delete</button>
+            </>
+          )}
         </div>
       </div>
+
+      {mode === 'templates' ? (
+        <ModelTemplatesView api={api} toast={toast} />
+      ) : (
+        <>
+
       <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
         <input placeholder="Search" value={q} onChange={e=>setQ(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface"/>
         <select value={framework} onChange={e=>setFramework(e.target.value)} className="border border-border rounded px-3 py-2 bg-surface">
@@ -167,6 +192,8 @@ export function ModelsPage({ api, onOpen, onCompare }) {
             ))}
           </tbody>
         </table>
+      )}
+        </>
       )}
     </div>
   );
@@ -517,6 +544,344 @@ export function ModelCompare({ ids, api, onBack }) {
           <tr><th className="text-left px-3 py-2">Tags</th>{cell((r,i)=>(<td key={i} className="px-3 py-2">{(r.metadata?.tags||[]).join(', ')}</td>))}</tr>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// Icon mapping for template categories
+const iconMap = {
+  'mic': '🎤',
+  'image': '🖼️',
+  'eye': '👁️',
+  'video': '🎥',
+  'message-square': '💬',
+  'layers': '📚',
+  'wand': '✨',
+  'type': '📝'
+};
+
+export function ModelTemplatesView({ api, toast }) {
+  const [templates, setTemplates] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+
+  useEffect(() => {
+    loadTemplates();
+  }, []);
+
+  const loadTemplates = async () => {
+    try {
+      const res = await fetch('/api/models/templates');
+      if (res.ok) {
+        const data = await res.json();
+        setTemplates(data);
+      } else {
+        toast.push({ type: 'error', title: 'Failed to load templates' });
+      }
+    } catch (e) {
+      toast.push({ type: 'error', title: 'Error loading templates', message: e.message });
+    }
+  };
+
+  if (!templates) {
+    return <div className="text-center py-8">Loading templates...</div>;
+  }
+
+  const categories = templates.categories || {};
+  const templateList = Object.entries(templates.templates || {});
+  const filteredTemplates = selectedCategory === 'all'
+    ? templateList
+    : templateList.filter(([_, t]) => t.category === selectedCategory);
+
+  if (selectedTemplate) {
+    return <TemplateDetail template={selectedTemplate} onBack={() => setSelectedTemplate(null)} toast={toast} />;
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Category Filter */}
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => setSelectedCategory('all')}
+          className={`px-4 py-2 rounded ${
+            selectedCategory === 'all'
+              ? 'bg-primary text-on-primary'
+              : 'bg-surface border border-border hover:bg-muted'
+          }`}
+        >
+          All Templates
+        </button>
+        {Object.entries(categories).map(([key, cat]) => (
+          <button
+            key={key}
+            onClick={() => setSelectedCategory(key)}
+            className={`px-4 py-2 rounded ${
+              selectedCategory === key
+                ? 'bg-primary text-on-primary'
+                : 'bg-surface border border-border hover:bg-muted'
+            }`}
+          >
+            {iconMap[cat.icon] || '📦'} {cat.name}
+          </button>
+        ))}
+      </div>
+
+      {/* Templates Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filteredTemplates.map(([id, template]) => (
+          <TemplateCard
+            key={id}
+            id={id}
+            template={template}
+            onClick={() => setSelectedTemplate({ id, ...template })}
+          />
+        ))}
+      </div>
+
+      {filteredTemplates.length === 0 && (
+        <div className="text-center py-12 text-text/60">
+          No templates found in this category
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TemplateCard({ id, template, onClick }) {
+  const icon = iconMap[template.icon] || '📦';
+  const category = template.category || 'general';
+
+  return (
+    <div
+      onClick={onClick}
+      className="border border-border rounded-lg bg-surface shadow-sm p-6 cursor-pointer hover:shadow-lg hover:border-primary/50 transition-all group"
+    >
+      <div className="flex items-start gap-4">
+        <div className="text-4xl">{icon}</div>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-lg font-semibold mb-1 group-hover:text-primary transition-colors">
+            {template.name}
+          </h3>
+          <p className="text-sm text-text/70 line-clamp-2 mb-3">
+            {template.description}
+          </p>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {template.tags?.slice(0, 3).map((tag, idx) => (
+              <span
+                key={idx}
+                className="px-2 py-1 text-xs bg-secondary/10 text-secondary border border-secondary/30 rounded"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+          <div className="text-xs text-text/60 space-y-1">
+            <div>Framework: <span className="font-semibold">{template.training?.framework || 'N/A'}</span></div>
+            <div>Precision: <span className="font-semibold">{template.training?.precision || 'N/A'}</span></div>
+            {template.resources?.min_gpu_memory && (
+              <div>Min GPU: <span className="font-semibold">{template.resources.min_gpu_memory}</span></div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TemplateDetail({ template, onBack, toast }) {
+  const [selectedConfig, setSelectedConfig] = useState('training');
+
+  const startTraining = () => {
+    toast.push({ type: 'info', title: 'Starting training with template', message: template.name });
+    // TODO: Navigate to job wizard with this template pre-filled
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={onBack}
+            className="px-3 py-2 border border-border rounded bg-surface hover:bg-muted"
+          >
+            ← Back
+          </button>
+          <div>
+            <h2 className="text-2xl font-bold">{template.name}</h2>
+            <p className="text-text/70">{template.description}</p>
+          </div>
+        </div>
+        <button
+          onClick={startTraining}
+          className="px-6 py-3 bg-primary text-on-primary rounded hover:brightness-110 font-semibold"
+        >
+          Use This Template
+        </button>
+      </div>
+
+      {/* Tags */}
+      <div className="flex flex-wrap gap-2">
+        {template.tags?.map((tag, idx) => (
+          <span
+            key={idx}
+            className="px-3 py-1 text-sm bg-secondary/10 text-secondary border border-secondary/30 rounded"
+          >
+            {tag}
+          </span>
+        ))}
+      </div>
+
+      {/* Config Tabs */}
+      <div className="border-b border-border">
+        <div className="flex gap-4">
+          {['overview', 'training', 'data', 'metrics', 'resources'].map(tab => (
+            <button
+              key={tab}
+              onClick={() => setSelectedConfig(tab)}
+              className={`px-4 py-2 font-medium capitalize transition-colors ${
+                selectedConfig === tab
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-text/60 hover:text-text'
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Config Content */}
+      <div className="bg-surface border border-border rounded-lg p-6">
+        {selectedConfig === 'overview' && (
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-lg font-semibold mb-2">Model Architecture</h3>
+              <p className="text-sm text-text/70 mb-2">
+                <span className="font-medium">Base Model:</span> {template.model?.base_model || 'Custom'}
+              </p>
+              <p className="text-sm text-text/70 mb-2">
+                <span className="font-medium">Architecture:</span> {template.model?.architecture || 'N/A'}
+              </p>
+              <p className="text-sm text-text/70 mb-2">
+                <span className="font-medium">Input Modalities:</span>{' '}
+                {template.model?.input_modalities?.join(', ') || 'N/A'}
+              </p>
+              <p className="text-sm text-text/70">
+                <span className="font-medium">Output Type:</span> {template.model?.output_type || 'N/A'}
+              </p>
+            </div>
+
+            {template.model?.components && (
+              <div>
+                <h3 className="text-lg font-semibold mb-2">Components</h3>
+                <pre className="bg-muted p-4 rounded text-xs overflow-x-auto">
+                  {JSON.stringify(template.model.components, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
+
+        {selectedConfig === 'training' && template.training && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Training Configuration</h3>
+            <div className="grid grid-cols-2 gap-4">
+              {Object.entries(template.training).map(([key, value]) => (
+                <div key={key} className="text-sm">
+                  <span className="font-medium capitalize text-text/70">
+                    {key.replace(/_/g, ' ')}:
+                  </span>{' '}
+                  <span className="font-mono">
+                    {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {selectedConfig === 'data' && template.data && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Data Configuration</h3>
+            <pre className="bg-muted p-4 rounded text-xs overflow-x-auto">
+              {JSON.stringify(template.data, null, 2)}
+            </pre>
+          </div>
+        )}
+
+        {selectedConfig === 'metrics' && template.metrics && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Evaluation Metrics</h3>
+            <div className="space-y-2">
+              {Array.isArray(template.metrics) ? (
+                template.metrics.map((metric, idx) => (
+                  <div key={idx} className="px-3 py-2 bg-muted rounded border border-border">
+                    {metric}
+                  </div>
+                ))
+              ) : (
+                Object.entries(template.metrics).map(([category, metrics]) => (
+                  <div key={category}>
+                    <h4 className="font-semibold capitalize mb-2">{category}</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {metrics.map((metric, idx) => (
+                        <span
+                          key={idx}
+                          className="px-3 py-1 bg-muted rounded border border-border text-sm"
+                        >
+                          {metric}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {selectedConfig === 'resources' && template.resources && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Resource Requirements</h3>
+            <div className="space-y-3">
+              {Object.entries(template.resources).map(([key, value]) => (
+                <div key={key} className="flex justify-between text-sm">
+                  <span className="font-medium capitalize text-text/70">
+                    {key.replace(/_/g, ' ')}:
+                  </span>
+                  <span>{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Dataset Pipeline (for Apotheon) */}
+      {template.dataset_pipeline && (
+        <div className="bg-surface border border-border rounded-lg p-6">
+          <h3 className="text-lg font-semibold mb-4">Dataset Pipeline</h3>
+          <div className="space-y-3">
+            {template.dataset_pipeline.steps?.map((step, idx) => (
+              <div key={idx} className="flex items-start gap-3 p-3 bg-muted rounded">
+                <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center text-sm font-semibold">
+                  {idx + 1}
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold">{step.name}</div>
+                  <div className="text-xs text-text/60">{step.description}</div>
+                  {step.params && (
+                    <div className="text-xs mt-1 font-mono text-text/70">
+                      {JSON.stringify(step.params)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
