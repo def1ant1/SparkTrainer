@@ -1,0 +1,409 @@
+# SparkTrainer Augmentation Configuration
+# Defines data augmentation pipelines for different modalities
+
+# =====================================================
+# IMAGE AUGMENTATIONS
+# =====================================================
+image:
+  # Basic augmentations
+  basic:
+    - type: "resize"
+      params:
+        size: [224, 224]
+        interpolation: "bilinear"
+
+    - type: "random_crop"
+      params:
+        size: [224, 224]
+        padding: 4
+      probability: 0.5
+
+    - type: "horizontal_flip"
+      probability: 0.5
+
+    - type: "normalize"
+      params:
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+
+  # Color augmentations
+  color:
+    - type: "color_jitter"
+      params:
+        brightness: 0.4
+        contrast: 0.4
+        saturation: 0.4
+        hue: 0.1
+      probability: 0.8
+
+    - type: "grayscale"
+      params:
+        num_output_channels: 3
+      probability: 0.2
+
+    - type: "random_posterize"
+      params:
+        bits: 4
+      probability: 0.2
+
+  # Geometric augmentations
+  geometric:
+    - type: "random_rotation"
+      params:
+        degrees: 15
+        interpolation: "bilinear"
+      probability: 0.5
+
+    - type: "random_affine"
+      params:
+        degrees: 15
+        translate: [0.1, 0.1]
+        scale: [0.9, 1.1]
+        shear: 10
+      probability: 0.3
+
+    - type: "random_perspective"
+      params:
+        distortion_scale: 0.2
+      probability: 0.3
+
+  # Advanced augmentations
+  advanced:
+    - type: "random_erasing"
+      params:
+        p: 0.5
+        scale: [0.02, 0.33]
+        ratio: [0.3, 3.3]
+      probability: 0.5
+
+    - type: "gaussian_blur"
+      params:
+        kernel_size: [5, 9]
+        sigma: [0.1, 2.0]
+      probability: 0.3
+
+    - type: "random_solarize"
+      params:
+        threshold: 128
+      probability: 0.2
+
+    - type: "cutout"
+      params:
+        n_holes: 1
+        length: 16
+      probability: 0.5
+
+  # AutoAugment policies
+  autoaugment:
+    - policy: "imagenet"
+      enabled: true
+
+    - policy: "cifar10"
+      enabled: false
+
+    - policy: "svhn"
+      enabled: false
+
+  # RandAugment
+  randaugment:
+    enabled: false
+    n: 2  # Number of augmentations to apply
+    m: 9  # Magnitude of augmentations (0-30)
+
+# =====================================================
+# VIDEO AUGMENTATIONS
+# =====================================================
+video:
+  # Temporal augmentations
+  temporal:
+    - type: "temporal_crop"
+      params:
+        num_frames: 16
+        stride: 1
+      probability: 1.0
+
+    - type: "temporal_random_crop"
+      params:
+        num_frames: 16
+      probability: 0.8
+
+    - type: "temporal_elastic_transform"
+      params:
+        alpha: 0.2
+      probability: 0.3
+
+  # Spatial augmentations (applied per frame)
+  spatial:
+    - type: "resize"
+      params:
+        size: [224, 224]
+
+    - type: "random_crop"
+      params:
+        size: [224, 224]
+      probability: 0.5
+
+    - type: "horizontal_flip"
+      probability: 0.5
+
+    - type: "color_jitter"
+      params:
+        brightness: 0.3
+        contrast: 0.3
+        saturation: 0.3
+      probability: 0.5
+
+  # Motion augmentations
+  motion:
+    - type: "random_speed"
+      params:
+        speed_range: [0.8, 1.2]
+      probability: 0.3
+
+    - type: "frame_drop"
+      params:
+        drop_rate: 0.1
+      probability: 0.2
+
+  # 3D augmentations
+  advanced:
+    - type: "random_rotate_3d"
+      params:
+        degrees: 10
+        axes: ["z"]
+      probability: 0.3
+
+    - type: "temporal_shift"
+      params:
+        max_shift: 2
+      probability: 0.5
+
+# =====================================================
+# AUDIO AUGMENTATIONS
+# =====================================================
+audio:
+  # Time-domain augmentations
+  time_domain:
+    - type: "time_stretch"
+      params:
+        rate_range: [0.8, 1.2]
+      probability: 0.5
+
+    - type: "pitch_shift"
+      params:
+        n_steps_range: [-2, 2]
+      probability: 0.5
+
+    - type: "add_noise"
+      params:
+        noise_type: "gaussian"
+        snr_db_range: [10, 30]
+      probability: 0.3
+
+    - type: "time_masking"
+      params:
+        max_mask_size: 0.1  # 10% of duration
+        n_masks: 1
+      probability: 0.3
+
+  # Frequency-domain augmentations
+  frequency_domain:
+    - type: "freq_masking"
+      params:
+        max_mask_size: 0.1  # 10% of frequency range
+        n_masks: 1
+      probability: 0.3
+
+    - type: "bandpass_filter"
+      params:
+        low_freq_range: [100, 500]
+        high_freq_range: [3000, 8000]
+      probability: 0.2
+
+  # Spectrogram augmentations
+  spectrogram:
+    - type: "spec_augment"
+      params:
+        time_mask_param: 80
+        freq_mask_param: 27
+        n_time_masks: 2
+        n_freq_masks: 2
+      probability: 0.8
+
+    - type: "mixup"
+      params:
+        alpha: 0.2
+      probability: 0.3
+
+  # Environmental augmentations
+  environmental:
+    - type: "add_background_noise"
+      params:
+        noise_dir: "data/background_noise"
+        snr_db_range: [5, 20]
+      probability: 0.3
+
+    - type: "add_reverb"
+      params:
+        room_scale_range: [0.5, 1.5]
+      probability: 0.2
+
+    - type: "simulate_room"
+      params:
+        rt60_range: [0.1, 0.5]
+      probability: 0.2
+
+# =====================================================
+# TEXT AUGMENTATIONS
+# =====================================================
+text:
+  # Token-level augmentations
+  token_level:
+    - type: "synonym_replacement"
+      params:
+        n_aug: 1  # Number of words to replace
+      probability: 0.3
+
+    - type: "random_insertion"
+      params:
+        n_aug: 1
+      probability: 0.2
+
+    - type: "random_swap"
+      params:
+        n_aug: 1
+      probability: 0.2
+
+    - type: "random_deletion"
+      params:
+        p: 0.1  # Probability of deleting each word
+      probability: 0.2
+
+  # Sentence-level augmentations
+  sentence_level:
+    - type: "back_translation"
+      params:
+        languages: ["de", "fr", "es"]
+      probability: 0.3
+      enabled: false  # Requires translation API
+
+    - type: "paraphrase"
+      params:
+        model: "tuner007/pegasus_paraphrase"
+      probability: 0.3
+      enabled: false  # Requires model
+
+  # Contextual augmentations
+  contextual:
+    - type: "contextual_word_embeddings"
+      params:
+        model: "bert-base-uncased"
+        n_aug: 1
+      probability: 0.3
+      enabled: false
+
+# =====================================================
+# MULTIMODAL AUGMENTATIONS
+# =====================================================
+multimodal:
+  # Cross-modal augmentations
+  cross_modal:
+    - type: "modality_dropout"
+      params:
+        dropout_rate: 0.1
+      probability: 0.2
+
+    - type: "modality_swap"
+      params:
+        swap_probability: 0.1
+      probability: 0.1
+
+  # Consistency augmentations
+  consistency:
+    - type: "consistent_crop"
+      description: "Apply same crop to image and video"
+      params:
+        size: [224, 224]
+
+    - type: "consistent_flip"
+      description: "Apply same flip to image and video"
+      probability: 0.5
+
+# =====================================================
+# AUGMENTATION PIPELINES
+# =====================================================
+pipelines:
+  # Vision-language training
+  vision_language:
+    image:
+      - "basic"
+      - "color"
+      - "geometric"
+    text:
+      - "token_level"
+
+  # Video understanding
+  video_understanding:
+    video:
+      - "temporal"
+      - "spatial"
+    audio:
+      - "time_domain"
+      - "frequency_domain"
+
+  # Audio-visual training
+  audio_visual:
+    video:
+      - "spatial"
+    audio:
+      - "time_domain"
+      - "spectrogram"
+    multimodal:
+      - "consistency"
+
+  # Multimodal (Apotheon)
+  apotheon_multimodal:
+    image:
+      - "basic"
+      - "color"
+    video:
+      - "temporal"
+      - "spatial"
+    audio:
+      - "time_domain"
+      - "spectrogram"
+    text:
+      - "token_level"
+    multimodal:
+      - "cross_modal"
+      - "consistency"
+
+  # Lightweight (for testing)
+  lightweight:
+    image:
+      - "basic"
+    video:
+      - "temporal"
+    audio:
+      - "time_domain"
+
+# =====================================================
+# AUGMENTATION SETTINGS
+# =====================================================
+settings:
+  # Global settings
+  seed: 42
+  deterministic: false
+
+  # Performance
+  num_workers: 4
+  pin_memory: true
+
+  # Caching
+  cache_augmented: false
+  cache_dir: "data/augmentation_cache"
+
+  # Debugging
+  save_augmented_samples: false
+  samples_dir: "data/augmented_samples"
+  num_debug_samples: 10

@@ -32,6 +32,7 @@ export default function ProfilePage() {
   });
   const [dashboard, setDashboard] = useState(null);
   const [persistentConfig, setPersistentConfig] = useState(null);
+  const [environmentInfo, setEnvironmentInfo] = useState(null);
   const [hfModels, setHfModels] = useState([]);
   const [hfDatasets, setHfDatasets] = useState([]);
   const [hfSearchModel, setHfSearchModel] = useState('');
@@ -43,6 +44,7 @@ export default function ProfilePage() {
     loadSettings();
     loadDashboard();
     loadPersistentConfig();
+    loadEnvironmentInfo();
   }, []);
 
   const loadSettings = async () => {
@@ -92,6 +94,25 @@ export default function ProfilePage() {
       }
     } catch (e) {
       console.error('Failed to load persistent config:', e);
+    }
+  };
+
+  const loadEnvironmentInfo = async () => {
+    try {
+      const res = await fetch('/api/settings/environment');
+      if (res.ok) {
+        const text = await res.text();
+        if (text) {
+          try {
+            const data = JSON.parse(text);
+            setEnvironmentInfo(data.environment);
+          } catch (parseError) {
+            console.error('Failed to parse environment JSON:', parseError);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load environment info:', e);
     }
   };
 
@@ -302,70 +323,115 @@ export default function ProfilePage() {
           {/* Environment Summary */}
           <div className="bg-surface border border-border rounded-lg p-6">
             <h2 className="text-xl font-semibold mb-4">Environment Summary</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Software Environment */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {/* System Information */}
               <div>
-                <h3 className="text-sm font-semibold text-text/70 mb-3">Software</h3>
+                <h3 className="text-sm font-semibold text-text/70 mb-3">System</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
+                    <span className="text-text/60">Platform:</span>
+                    <span className="font-mono text-xs">{environmentInfo?.system?.platform?.split(' ')[0] || 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-text/60">Architecture:</span>
+                    <span className="font-mono">{environmentInfo?.system?.architecture || 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
                     <span className="text-text/60">Python:</span>
-                    <span className="font-mono">{dashboard?.environment?.python_version || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-text/60">PyTorch:</span>
-                    <span className="font-mono">{dashboard?.environment?.pytorch_version || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-text/60">CUDA:</span>
-                    <span className="font-mono">
-                      {dashboard?.environment?.cuda_available ? dashboard?.environment?.cuda_version : 'Not available'}
-                    </span>
+                    <span className="font-mono text-xs">{environmentInfo?.system?.python_version?.split(' ')[0] || dashboard?.environment?.python_version || 'N/A'}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Hardware Summary */}
+              {/* PyTorch & CUDA */}
               <div>
-                <h3 className="text-sm font-semibold text-text/70 mb-3">Hardware</h3>
+                <h3 className="text-sm font-semibold text-text/70 mb-3">Compute</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-text/60">CPUs:</span>
-                    <span className="font-mono">{dashboard?.environment?.cpu_count || 0}</span>
+                    <span className="text-text/60">PyTorch:</span>
+                    <span className="font-mono">{environmentInfo?.pytorch?.version || dashboard?.environment?.pytorch_version || 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-text/60">CUDA:</span>
+                    <span className="font-mono">
+                      {environmentInfo?.pytorch?.cuda_available ? environmentInfo.pytorch.cuda_version : 'Not available'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-text/60">cuDNN:</span>
+                    <span className="font-mono">
+                      {environmentInfo?.pytorch?.cudnn_version || 'N/A'}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-text/60">GPUs:</span>
-                    <span className="font-mono">{dashboard?.environment?.gpu_count || 0}</span>
+                    <span className="font-mono">{environmentInfo?.pytorch?.gpu_count || dashboard?.environment?.gpu_count || 0}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Libraries */}
+              <div>
+                <h3 className="text-sm font-semibold text-text/70 mb-3">Libraries</h3>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-text/60">Transformers:</span>
+                    <span className="font-mono">{environmentInfo?.transformers?.version || 'N/A'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-text/60">Memory:</span>
-                    <span className="font-mono">{dashboard?.environment?.memory_total_gb || 0} GB</span>
+                    <span className="text-text/60">FFmpeg:</span>
+                    <span className={`font-mono ${environmentInfo?.ffmpeg?.available ? 'text-success' : 'text-error'}`}>
+                      {environmentInfo?.ffmpeg?.available ? 'Available' : 'Not installed'}
+                    </span>
                   </div>
+                  {environmentInfo?.spark_trainer && (
+                    <div className="flex justify-between">
+                      <span className="text-text/60">SparkTrainer:</span>
+                      <span className="font-mono text-xs">{environmentInfo.spark_trainer.base_dir?.split('/').pop() || 'Installed'}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
             {/* GPU Details */}
-            {dashboard?.system?.gpus && dashboard.system.gpus.length > 0 && (
+            {(dashboard?.system?.gpus && dashboard.system.gpus.length > 0) || (environmentInfo?.gpus && environmentInfo.gpus.length > 0) ? (
               <div className="mt-6">
                 <h3 className="text-sm font-semibold text-text/70 mb-3">GPU Details</h3>
                 <div className="space-y-2">
-                  {dashboard.system.gpus.map((gpu, idx) => (
+                  {dashboard?.system?.gpus ? (
+                    dashboard.system.gpus.map((gpu, idx) => (
+                      <div key={idx} className="flex items-center justify-between p-3 bg-muted rounded border border-border">
+                        <div>
+                          <div className="font-medium">{gpu.name || `GPU ${idx}`}</div>
+                          <div className="text-xs text-text/60">
+                            {(gpu.memory_used_mib / 1024).toFixed(1)} GB / {(gpu.memory_total_mib / 1024).toFixed(1)} GB
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-mono">{gpu.utilization || 0}%</div>
+                          <div className="text-xs text-text/60">Utilization</div>
+                        </div>
+                      </div>
+                    ))
+                  ) : environmentInfo?.gpus?.map((gpu, idx) => (
                     <div key={idx} className="flex items-center justify-between p-3 bg-muted rounded border border-border">
                       <div>
                         <div className="font-medium">{gpu.name || `GPU ${idx}`}</div>
                         <div className="text-xs text-text/60">
-                          {(gpu.memory_used_mib / 1024).toFixed(1)} GB / {(gpu.memory_total_mib / 1024).toFixed(1)} GB
+                          Capability: {gpu.capability ? `${gpu.capability[0]}.${gpu.capability[1]}` : 'N/A'} |
+                          Memory: {(gpu.total_memory / (1024**3)).toFixed(1)} GB
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-sm font-mono">{gpu.utilization || 0}%</div>
-                        <div className="text-xs text-text/60">Utilization</div>
+                        <div className="text-sm font-mono">GPU {gpu.id}</div>
+                        <div className="text-xs text-text/60">Device ID</div>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* System Resources */}
             {dashboard?.system?.memory && (
