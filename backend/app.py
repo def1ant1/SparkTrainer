@@ -6144,6 +6144,315 @@ def metrics_history_csv():
     return Response(data, headers={'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename=metrics_history.csv'})
 
 
+# ==========================================
+# Profile and Settings API Endpoints
+# ==========================================
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    """Get user settings"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        manager = get_profile_manager()
+        settings = manager.get_settings()
+        return jsonify({
+            'success': True,
+            'settings': settings.__dict__
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/settings', methods=['PUT'])
+def update_settings():
+    """Update user settings"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        data = request.get_json()
+        manager = get_profile_manager()
+        settings = manager.update_settings(**data)
+        return jsonify({
+            'success': True,
+            'settings': settings.__dict__
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/settings/environment', methods=['GET'])
+def get_environment_info():
+    """Get comprehensive environment information"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        manager = get_profile_manager()
+        env_info = manager.get_environment_info()
+        return jsonify({
+            'success': True,
+            'environment': env_info
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/profiles', methods=['GET'])
+def get_profiles():
+    """Get all configuration profiles"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        manager = get_profile_manager()
+        tag = request.args.get('tag')
+
+        if tag:
+            profile_names = manager.list_profiles(tag=tag)
+            profiles = {name: manager.get_profile(name) for name in profile_names}
+        else:
+            profiles = manager.get_profiles()
+
+        return jsonify({
+            'success': True,
+            'profiles': profiles
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/profiles/<profile_name>', methods=['GET'])
+def get_profile(profile_name):
+    """Get a specific profile"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        manager = get_profile_manager()
+        profile = manager.get_profile(profile_name)
+
+        if profile is None:
+            return jsonify({'error': 'Profile not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'profile': profile
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/profiles', methods=['POST'])
+def create_profile():
+    """Create a new configuration profile"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        data = request.get_json()
+        name = data.get('name')
+        config = data.get('config')
+        description = data.get('description', '')
+        tags = data.get('tags', [])
+
+        if not name or not config:
+            return jsonify({'error': 'Name and config are required'}), 400
+
+        manager = get_profile_manager()
+        manager.create_profile(name, config, description, tags)
+
+        return jsonify({
+            'success': True,
+            'message': f'Profile {name} created successfully'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/profiles/<profile_name>', methods=['PUT'])
+def update_profile(profile_name):
+    """Update an existing profile"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        data = request.get_json()
+        config = data.get('config')
+
+        if not config:
+            return jsonify({'error': 'Config is required'}), 400
+
+        manager = get_profile_manager()
+        manager.update_profile(profile_name, config)
+
+        return jsonify({
+            'success': True,
+            'message': f'Profile {profile_name} updated successfully'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/profiles/<profile_name>', methods=['DELETE'])
+def delete_profile(profile_name):
+    """Delete a profile"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        manager = get_profile_manager()
+        success = manager.delete_profile(profile_name)
+
+        if not success:
+            return jsonify({'error': 'Profile not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'message': f'Profile {profile_name} deleted successfully'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/settings/recent/<resource_type>', methods=['POST'])
+def add_recent_resource(resource_type):
+    """Add a resource to recent activity"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.profiles import get_profile_manager
+
+        data = request.get_json()
+        resource_id = data.get('id')
+
+        if not resource_id:
+            return jsonify({'error': 'Resource ID is required'}), 400
+
+        manager = get_profile_manager()
+
+        if resource_type == 'dataset':
+            manager.add_recent_dataset(resource_id)
+        elif resource_type == 'model':
+            manager.add_recent_model(resource_id)
+        elif resource_type == 'experiment':
+            manager.add_recent_experiment(resource_id)
+        else:
+            return jsonify({'error': 'Invalid resource type'}), 400
+
+        return jsonify({
+            'success': True,
+            'message': f'Added {resource_id} to recent {resource_type}s'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trainers/registry', methods=['GET'])
+def get_trainer_registry():
+    """Get the autodiscovered trainer registry"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.trainer_registry import get_trainer_registry
+
+        registry = get_trainer_registry()
+        registry_data = registry.get_registry()
+
+        # Optional filters
+        model_type = request.args.get('model_type')
+        tag = request.args.get('tag')
+
+        if model_type or tag:
+            trainers = registry.list_trainers(model_type=model_type, tag=tag)
+            registry_data = {
+                t.name: {
+                    'name': t.name,
+                    'description': t.description,
+                    'module_path': t.module_path,
+                    'class_name': t.class_name,
+                    'model_types': t.model_types,
+                    'tags': t.tags,
+                    'author': t.author,
+                    'version': t.version,
+                    'requirements': t.requirements,
+                    'discovered_at': t.discovered_at
+                }
+                for t in trainers
+            }
+
+        return jsonify({
+            'success': True,
+            'trainers': registry_data,
+            'count': len(registry_data)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trainers/registry/reload', methods=['POST'])
+def reload_trainer_registry():
+    """Reload the trainer registry (useful for development)"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.trainer_registry import reload_registry
+
+        registry = reload_registry()
+        registry_data = registry.get_registry()
+
+        return jsonify({
+            'success': True,
+            'message': f'Reloaded trainer registry with {len(registry_data)} trainers',
+            'trainers': registry_data
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trainers/<trainer_name>', methods=['GET'])
+def get_trainer_info(trainer_name):
+    """Get information about a specific trainer"""
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+        from spark_trainer.trainer_registry import get_trainer_registry
+
+        registry = get_trainer_registry()
+        metadata = registry.get_trainer_metadata(trainer_name)
+
+        if metadata is None:
+            return jsonify({'error': 'Trainer not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'trainer': {
+                'name': metadata.name,
+                'description': metadata.description,
+                'module_path': metadata.module_path,
+                'class_name': metadata.class_name,
+                'model_types': metadata.model_types,
+                'tags': metadata.tags,
+                'author': metadata.author,
+                'version': metadata.version,
+                'requirements': metadata.requirements,
+                'discovered_at': metadata.discovered_at
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/hpo/<job_id>', methods=['GET'])
 def hpo_results(job_id):
     base = os.path.join(MODELS_DIR, job_id)
