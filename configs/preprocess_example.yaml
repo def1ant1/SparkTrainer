@@ -1,0 +1,36 @@
+# Example preprocessing configuration for SparkTrainer
+
+preprocess:
+  # Input/Output
+  video_dir: /path/to/videos
+  output_dir: data/processed
+
+  # Video processing
+  extract_frames: true
+  frame_rate: 1.0  # Extract 1 frame per second
+  resolution: "224x224"  # Target resolution (WxH)
+  max_frames: null  # No limit
+
+  # Audio processing
+  extract_audio: true
+  transcribe: false  # Set to true to use Whisper
+  whisper_model: base  # base, small, medium, large
+
+  # Captioning
+  generate_captions: true
+  captioner_backend: blip2  # blip, blip2, internvl, qwen2-vl, florence2
+  captioner_model: null  # Use default for backend
+  caption_batch_size: 8
+
+  # Data layout
+  deterministic_layout: true
+  manifest_version: 1
+
+  # Processing options
+  num_workers: 4
+  recursive: true
+
+# Global settings
+log_dir: null  # Auto-generate timestamp-based log dir
+gpu_validation: true
+ffmpeg_validation: true

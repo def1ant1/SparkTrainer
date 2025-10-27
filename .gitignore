@@ -40,3 +40,28 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# SparkTrainer specific
+runs/
+data/
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.flv
+
+# Model files
+*.pt
+*.pth
+*.safetensors
+
+# Temporary
+tmp/
+temp/

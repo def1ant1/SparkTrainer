@@ -1,0 +1,54 @@
+# Example training configuration for Vision-Language models
+
+train:
+  # Model configuration
+  model_name: Salesforce/blip2-opt-2.7b
+  model_type: vision_language
+  pretrained: true
+
+  # Data configuration
+  manifest_path: data/processed/manifest_v1.jsonl
+  val_manifest_path: null  # Optional validation manifest
+  batch_size: 8
+  num_workers: 4
+
+  # Training hyperparameters
+  learning_rate: 1.0e-5
+  num_epochs: 10
+  warmup_steps: 500
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+
+  # Optimization
+  optimizer: adamw
+  weight_decay: 0.01
+  scheduler: cosine  # linear, cosine, constant
+
+  # Distributed training
+  use_accelerate: true
+  use_deepspeed: false
+  deepspeed_config: null  # configs/deepspeed_zero2.json
+  mixed_precision: bf16  # no, fp16, bf16
+
+  # Logging and checkpointing
+  output_dir: runs/blip2_experiment
+  logging_steps: 10
+  eval_steps: 500
+  save_steps: 1000
+  save_total_limit: 3
+
+  # Sampling strategy (not used for VL models, but kept for consistency)
+  clip_sampling: random
+  clip_length: 16
+  clip_stride: 1
+
+  # Resume training
+  resume_from_checkpoint: null
+
+  # Seed
+  seed: 42
+
+# Global settings
+log_dir: null
+gpu_validation: true
+ffmpeg_validation: false
