@@ -739,6 +739,7 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
   const [groupByProject, setGroupByProject] = useState(false);
   const [experimentFilter, setExperimentFilter] = useState('');
   const [groupByExperiment, setGroupByExperiment] = useState(false);
+  const [selectedJobs, setSelectedJobs] = useState({});
   
   useEffect(() => {
     loadJobs();
@@ -802,6 +803,79 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
     }
   };
 
+  const selectedJobIds = Object.keys(selectedJobs).filter(k => selectedJobs[k]);
+
+  const toggleAllJobs = (filtered) => {
+    if (selectedJobIds.length === filtered.length && filtered.length > 0) {
+      setSelectedJobs({});
+    } else {
+      setSelectedJobs(Object.fromEntries(filtered.map(j => [j.id, true])));
+    }
+  };
+
+  const bulkCancelJobs = async () => {
+    const jobsToCanel = selectedJobIds.filter(id => {
+      const job = jobs.find(j => j.id === id);
+      return job && job.status === 'running';
+    });
+
+    if (jobsToCanel.length === 0) {
+      toast.push({ type: 'warning', title: 'No running jobs selected' });
+      return;
+    }
+
+    if (!confirm(`Cancel ${jobsToCanel.length} running job${jobsToCanel.length > 1 ? 's' : ''}?`)) return;
+
+    let success = 0, failed = 0;
+    for (const jobId of jobsToCanel) {
+      try {
+        await api.cancelJob(jobId);
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+    setSelectedJobs({});
+    loadJobs();
+    toast.push({
+      type: success > 0 ? 'success' : 'error',
+      title: `Cancelled ${success} job${success !== 1 ? 's' : ''}`,
+      message: failed > 0 ? `${failed} failed` : undefined
+    });
+  };
+
+  const bulkDeleteJobs = async () => {
+    const jobsToDelete = selectedJobIds.filter(id => {
+      const job = jobs.find(j => j.id === id);
+      return job && ['completed', 'failed', 'cancelled'].includes(job.status);
+    });
+
+    if (jobsToDelete.length === 0) {
+      toast.push({ type: 'warning', title: 'No deletable jobs selected', message: 'Only completed, failed, or cancelled jobs can be deleted' });
+      return;
+    }
+
+    if (!confirm(`Delete ${jobsToDelete.length} job${jobsToDelete.length > 1 ? 's' : ''}? This cannot be undone.`)) return;
+
+    let success = 0, failed = 0;
+    for (const jobId of jobsToDelete) {
+      try {
+        const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+        if (res.ok) success++;
+        else failed++;
+      } catch {
+        failed++;
+      }
+    }
+    setSelectedJobs({});
+    loadJobs();
+    toast.push({
+      type: success > 0 ? 'success' : 'error',
+      title: `Deleted ${success} job${success !== 1 ? 's' : ''}`,
+      message: failed > 0 ? `${failed} failed` : undefined
+    });
+  };
+
   useEffect(() => {
     if (!selectedJob) { setCheckpoints([]); return; }
     (async () => {
@@ -836,16 +910,35 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Training Jobs</h1>
         <div className="flex gap-2">
+          {selectedJobIds.length > 0 && (
+            <>
+              <span className="px-3 py-2 bg-muted rounded border border-border text-sm">
+                {selectedJobIds.length} selected
+              </span>
+              <button
+                onClick={bulkCancelJobs}
+                className="px-3 py-2 bg-warning/10 text-warning border border-warning/30 rounded hover:bg-warning/20"
+              >
+                Cancel Selected
+              </button>
+              <button
+                onClick={bulkDeleteJobs}
+                className="px-3 py-2 bg-danger/10 text-danger border border-danger/30 rounded hover:bg-danger/20"
+              >
+                Delete Selected
+              </button>
+            </>
+          )}
           <button
             onClick={() => onNavigate('create')}
-            className="bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
+            className="bg-primary text-on-primary py-2 px-4 rounded-lg hover:brightness-110 transition flex items-center gap-2"
           >
             <Plus size={16} />
             New Job
           </button>
           <button
             onClick={() => onNavigate('dashboard')}
-            className="text-blue-600 hover:text-blue-800"
+            className="text-primary hover:brightness-110"
           >
             ← Dashboard
           </button>
@@ -873,6 +966,26 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
         <table className="w-full">
           <thead className="bg-muted border-b border-border">
             <tr>
+              <th className="px-3 py-3 text-left">
+                <input
+                  type="checkbox"
+                  checked={selectedJobIds.length > 0 && jobs.filter(j =>
+                    (!q || j.name.toLowerCase().includes(q.toLowerCase())) &&
+                    (!statusFilter || j.status===statusFilter) &&
+                    (!frameworkFilter || j.framework===frameworkFilter) &&
+                    (!userFilter || ((j.config && j.config.user && String(j.config.user).toLowerCase().includes(userFilter.toLowerCase())) || (j.user && String(j.user).toLowerCase().includes(userFilter.toLowerCase())))) &&
+                    (!experimentFilter || ((j.experiment && j.experiment.name && String(j.experiment.name).toLowerCase().includes(experimentFilter.toLowerCase()))))
+                  ).every(j => selectedJobs[j.id])}
+                  onChange={(e) => toggleAllJobs(jobs.filter(j =>
+                    (!q || j.name.toLowerCase().includes(q.toLowerCase())) &&
+                    (!statusFilter || j.status===statusFilter) &&
+                    (!frameworkFilter || j.framework===frameworkFilter) &&
+                    (!userFilter || ((j.config && j.config.user && String(j.config.user).toLowerCase().includes(userFilter.toLowerCase())) || (j.user && String(j.user).toLowerCase().includes(userFilter.toLowerCase())))) &&
+                    (!experimentFilter || ((j.experiment && j.experiment.name && String(j.experiment.name).toLowerCase().includes(experimentFilter.toLowerCase()))))
+                  ))}
+                  className="w-4 h-4"
+                />
+              </th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Name</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Type</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase">Framework</th>
@@ -895,6 +1008,14 @@ const JobsList = ({ onNavigate, partitions, onOpenHpo }) => {
               if (!groupByProject && !groupByExperiment) {
                 return filtered.map((job) => (
                    <tr key={job.id} className="hover:bg-muted">
+                  <td className="px-3 py-4">
+                    <input
+                      type="checkbox"
+                      checked={!!selectedJobs[job.id]}
+                      onChange={(e) => setSelectedJobs(prev => ({ ...prev, [job.id]: e.target.checked }))}
+                      className="w-4 h-4"
+                    />
+                  </td>
                   <td className="px-6 py-4 text-sm font-medium">{job.name}</td>
                   <td className="px-6 py-4 text-sm text-text/80 capitalize">{job.type}</td>
                   <td className="px-6 py-4 text-sm text-text/80 capitalize">{job.framework}</td>
