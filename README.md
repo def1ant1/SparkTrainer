@@ -8,6 +8,20 @@ SparkTrainer is an enterprise-grade machine learning training platform that comb
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://www.docker.com/)
 
+## 🆕 Latest MLOps Enhancements
+
+SparkTrainer now includes comprehensive production-ready features:
+
+- **📦 Data Ingestion & Versioning**: JSONL manifests, lakeFS/DVC integration, quality gates (dedupe, PII redaction, toxicity filtering), auto-generated dataset cards
+- **🔒 Safety & Evaluation**: Toxicity/bias/jailbreak probes, calibration curves, comprehensive safety reports
+- **🎯 Model Registry**: Lifecycle management (Dev→Staging→Production), promotion gates with approval workflows, signed model bundles
+- **⚡ Inference Adapters**: vLLM, TGI, Triton, TorchServe support with unified interface
+- **🧪 A/B Testing**: Shadow deployment, canary releases, statistical significance testing
+- **🖥️ GPU Scheduling**: Smart placement, MIG awareness, auto-resume from checkpoints
+- **📚 Recipe Templates**: Standardized workflows for LLM/Vision/Audio/Video with efficiency toggles
+
+**📖 [Full MLOps Documentation](./docs/MLOPS_ENHANCEMENTS.md)**
+
 ## ✨ Key Features
 
 ### 🎯 **Job & Tracking Foundation**
