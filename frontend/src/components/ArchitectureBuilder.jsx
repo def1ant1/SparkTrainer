@@ -394,7 +394,7 @@ function propagateShape(node, inShape) {
   }
 }
 
-export default function ArchitectureBuilder() {
+export default function ArchitectureBuilder({ api }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -574,6 +574,35 @@ export default function ArchitectureBuilder() {
     downloadFile('model.py', code);
   };
 
+  const saveModel = async () => {
+    const modelName = prompt('Enter model name:', 'custom_model');
+    if (!modelName) return;
+
+    const code = generatePyTorch(nodes, edges, modelConfig);
+    const payload = {
+      name: modelName,
+      architecture: { nodes, edges },
+      config: modelConfig,
+      code: code,
+      metadata: {
+        batch_size: batchSize,
+        dtype: dtype,
+        created_from: 'builder'
+      }
+    };
+
+    try {
+      const result = await api.saveModel(payload);
+      if (result.status === 'ok') {
+        alert(`Model "${modelName}" saved successfully!`);
+      } else {
+        alert(`Failed to save model: ${result.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      alert(`Failed to save model: ${error.message}`);
+    }
+  };
+
   const downloadFile = (filename, content) => {
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -701,6 +730,7 @@ export default function ArchitectureBuilder() {
             <button className={`px-2 py-1 rounded border text-xs ${connecting ? 'border-primary text-primary' : 'border-border'}`} onClick={() => setConnecting(null)}>{connecting ? 'Click target node…' : 'Connect Mode'}</button>
             <button className="px-2 py-1 rounded border border-border hover:bg-muted text-xs" onClick={() => { setNodes([]); setEdges([]); setSelected(null); }}>Clear</button>
             <button className="px-2 py-1 rounded border border-border hover:bg-muted text-xs" onClick={exportPyTorch}>Export PyTorch</button>
+            <button className="px-2 py-1 rounded border border-primary bg-primary text-on-primary hover:opacity-90 text-xs" onClick={saveModel}>Save Model</button>
           </div>
         </div>
 

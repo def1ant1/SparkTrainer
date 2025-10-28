@@ -43,20 +43,20 @@ export default function Labeling({ api }){
       <div className="flex items-center gap-3">
         <div>
           <label className="text-sm">Dataset</label>
-          <select className="block border rounded px-3 py-2" value={name} onChange={e=>{ setName(e.target.value); setVersion(''); setOffset(0); }}>
+          <select className="block border border-border bg-surface text-text rounded px-3 py-2" value={name} onChange={e=>{ setName(e.target.value); setVersion(''); setOffset(0); }}>
             <option value="">Choose…</option>
             {(datasets||[]).map(d => (<option key={d.name} value={d.name}>{d.name}</option>))}
           </select>
         </div>
         <div>
           <label className="text-sm">Version</label>
-          <select className="block border rounded px-3 py-2" value={version} onChange={e=>{ setVersion(e.target.value); setOffset(0); }}>
+          <select className="block border border-border bg-surface text-text rounded px-3 py-2" value={version} onChange={e=>{ setVersion(e.target.value); setOffset(0); }}>
             {(detail?.versions||[]).map(v => (<option key={v.version} value={v.version}>{v.version}</option>))}
           </select>
         </div>
         <div>
           <label className="text-sm">Mode</label>
-          <select className="block border rounded px-3 py-2" value={mode} onChange={e=>setMode(e.target.value)}>
+          <select className="block border border-border bg-surface text-text rounded px-3 py-2" value={mode} onChange={e=>setMode(e.target.value)}>
             <option value="text_cls">Text Classification</option>
             <option value="ner">NER (beta)</option>
             <option value="image_bbox">Image Bounding Boxes</option>
@@ -65,7 +65,7 @@ export default function Labeling({ api }){
         {mode==='text_cls' && (
           <div>
             <label className="text-sm">Labels</label>
-            <input className="border rounded px-3 py-2" value={labels} onChange={e=>setLabels(e.target.value)} placeholder="comma-separated" />
+            <input className="border border-border bg-surface text-text rounded px-3 py-2" value={labels} onChange={e=>setLabels(e.target.value)} placeholder="comma-separated" />
           </div>
         )}
         <div className="ml-auto flex items-end gap-2">
@@ -125,7 +125,7 @@ export default function Labeling({ api }){
                 <TextPreview name={name} version={version} path={s.path} />
                 {mode==='text_cls' ? (
                   <div className="mt-2">
-                    <select className="border rounded px-2 py-1 text-sm" value={(annos[s.path]?.label)||''} onChange={e=>updateAnno(s.path, { path: s.path, label: e.target.value })}>
+                    <select className="border border-border bg-surface text-text rounded px-2 py-1 text-sm" value={(annos[s.path]?.label)||''} onChange={e=>updateAnno(s.path, { path: s.path, label: e.target.value })}>
                       <option value="">unset</option>
                       {labelList.map(l => (<option key={l} value={l}>{l}</option>))}
                     </select>
@@ -228,7 +228,7 @@ function ImageBBoxAnnotator({ imageUrl, anno, onChange, labels }){
   return (
     <div>
       <div className="flex items-center gap-2 text-xs mb-2">
-        <label>Label<select className="border rounded px-2 py-1 ml-1" value={label} onChange={e=>setLabel(e.target.value)}>{(labels||['object']).map(l => <option key={l} value={l}>{l}</option>)}</select></label>
+        <label>Label<select className="border border-border bg-surface text-text rounded px-2 py-1 ml-1" value={label} onChange={e=>setLabel(e.target.value)}>{(labels||['object']).map(l => <option key={l} value={l}>{l}</option>)}</select></label>
         <button className="px-2 py-1 border rounded" onClick={()=>{ setBoxes([]); onChange && onChange([], imgSize); }}>Clear</button>
       </div>
       <div

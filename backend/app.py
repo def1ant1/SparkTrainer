@@ -828,6 +828,64 @@ def export_models():
     return send_file(mem, mimetype='application/zip', as_attachment=True, download_name='models_export.zip')
 
 
+@app.route('/api/models/save', methods=['POST'])
+def save_model():
+    """Save a model architecture created in the builder"""
+    data = request.json or {}
+    name = data.get('name', 'custom_model')
+    architecture = data.get('architecture', {})
+    config = data.get('config', {})
+    code = data.get('code', '')
+    metadata = data.get('metadata', {})
+
+    # Create unique model ID
+    import uuid
+    import datetime
+    model_id = f"{_safe_name(name)}_{uuid.uuid4().hex[:8]}"
+    model_dir = os.path.join(MODELS_DIR, model_id)
+    os.makedirs(model_dir, exist_ok=True)
+
+    # Save architecture JSON
+    with open(os.path.join(model_dir, 'architecture.json'), 'w', encoding='utf-8') as f:
+        json.dump(architecture, f, indent=2)
+
+    # Save config JSON
+    config_path = os.path.join(model_dir, 'config.json')
+    full_config = {
+        'model_id': model_id,
+        'name': name,
+        'architecture': 'custom',
+        'created_from': metadata.get('created_from', 'builder'),
+        'batch_size': metadata.get('batch_size', 8),
+        'dtype': metadata.get('dtype', 'fp16'),
+        **config
+    }
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(full_config, f, indent=2)
+
+    # Save generated PyTorch code
+    if code:
+        with open(os.path.join(model_dir, 'model.py'), 'w', encoding='utf-8') as f:
+            f.write(code)
+
+    # Save metadata
+    meta_path = os.path.join(model_dir, 'metadata.json')
+    full_metadata = {
+        'name': name,
+        'model_id': model_id,
+        'architecture': 'Custom',
+        'framework': 'PyTorch',
+        'created_at': datetime.datetime.now().isoformat(),
+        'created_from': 'builder',
+        'tags': ['custom', 'builder'],
+        **metadata
+    }
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(full_metadata, f, indent=2)
+
+    return jsonify({'status': 'ok', 'model_id': model_id, 'message': f'Model saved as {model_id}'})
+
+
 @app.route('/api/models/<model_id>/card.html', methods=['GET'])
 def model_card_html(model_id):
     path = os.path.join(MODELS_DIR, model_id)
