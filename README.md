@@ -1,403 +1,345 @@
-# DGX AI Trainer
+# SparkTrainer 🚀
 
-A comprehensive web-based application for training and fine-tuning AI models on NVIDIA DGX Spark systems. This platform provides an intuitive interface for managing machine learning training jobs with support for PyTorch, TensorFlow, and Hugging Face Transformers.
+**Production-ready multimodal AI training platform with comprehensive MLOps capabilities**
 
-## Features
+SparkTrainer is an enterprise-grade machine learning training platform that combines powerful distributed training, automated data ingestion, experiment tracking, and production deployment tools into a unified system.
 
-### Core Capabilities
-- **Train from Scratch**: Create custom neural networks with configurable architectures
-- **Fine-tune Models**: Fine-tune pre-trained models for your specific tasks
-- **Multi-Framework Support**: PyTorch, TensorFlow, and Hugging Face Transformers
-- **Real-time Monitoring**: Track training progress, metrics, and logs in real-time
-- **GPU Management**: Monitor GPU utilization and manage training job allocation
-- **Job Queue**: Efficient job scheduling and management system
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://www.docker.com/)
 
-### Supported Architectures
-- Custom fully-connected networks
-- ResNet-style convolutional networks
-- Pre-trained models (ResNet, VGG, DenseNet, BERT, GPT-2, etc.)
-- Custom transformer architectures
+## ✨ Key Features
 
-## Architecture
+### 🎯 **Job & Tracking Foundation**
+- **Distributed Task Queue**: Celery + Redis for async job processing
+- **Database-Backed**: PostgreSQL with comprehensive schema (projects, experiments, datasets, jobs, artifacts)
+- **Job State Machine**: Validated status transitions with full audit trail
+- **MLflow Integration**: Centralized experiment tracking with artifact storage
+- **Real-time Monitoring**: Flower UI for worker health and task monitoring
 
-```
-dgx-ai-trainer/
-├── backend/                 # Flask API server
-│   ├── app.py              # Main API application
-│   └── requirements.txt    # Python dependencies
-├── frontend/               # React web interface
-│   ├── src/
-│   │   ├── App.jsx        # Main React application
-│   │   ├── main.jsx       # Entry point
-│   │   └── index.css      # Styles
-│   ├── package.json
-│   └── index.html
-├── training_scripts/       # Training implementations
-│   ├── train_pytorch.py
-│   ├── finetune_pytorch.py
-│   └── train_huggingface.py
-├── jobs/                   # Job metadata and state
-├── models/                 # Trained model checkpoints
-└── logs/                   # Training logs
-```
+### 📹 **Data Ingestion (Video-First)**
+- **Video Wizard**: 4-step guided workflow for dataset creation
+- **Automated Processing**:
+  - Frame extraction (configurable FPS, resolution)
+  - Audio extraction & Whisper transcription
+  - Multi-backend captioning (BLIP-2, InternVL, Qwen2-VL, Florence-2)
+  - Scene detection with PySceneDetect
+- **Integrity Checks**: Video validation, corruption detection, format verification
+- **Manifest Generation**: JSONL format with complete metadata
 
-## Configuration
+### 🧠 **Trainer Unification + LoRA**
+- **Recipe Interface**: Standardized workflow (prepare → build → train → eval → package)
+- **LoRA/QLoRA Support**: Parameter-efficient fine-tuning with 4-bit quantization
+- **Auto-target Detection**: Automatically identify attention layers for LoRA
+- **FSDP Ready**: Fully Sharded Data Parallel for large models
+- **Multiple Backends**: PyTorch, HuggingFace Transformers, DeepSpeed
 
-- Backend paths are now project-relative by default. Override with env vars:
-  - `DGX_TRAINER_BASE_DIR` (defaults to repo root)
-  - `JOBS_DIR`, `MODELS_DIR`, `LOGS_DIR`, `TRAINING_SCRIPTS_DIR` (absolute or relative to base dir)
-- Frontend API base uses `VITE_API_URL` if provided, otherwise calls relative `/api` so reverse proxies (nginx) work out-of-the-box.
+### 📊 **UX Dashboards & Evaluations**
+- **Project Organization**: Hierarchical structure (Projects → Datasets → Experiments)
+- **Leaderboard**: Multi-benchmark rankings with top-3 highlighting
+- **MMLU Evaluation**: 57 subjects across STEM, humanities, social sciences
+- **COCO Evaluation**: Captioning (BLEU, CIDEr, SPICE), detection, segmentation
+- **Live Metrics**: Real-time training progress (WebSocket-ready)
 
-Examples:
+## 🏗️ Architecture
 
 ```
-# Use custom data directories
-export JOBS_DIR=./data/jobs
-export MODELS_DIR=/mnt/models
-export LOGS_DIR=./run/logs
-
-# Point frontend at a remote API during development
-VITE_API_URL=http://localhost:5000 npm run dev
+┌─────────────────────────────────────────────────────────┐
+│              Frontend (React + Vite)                     │
+│  Projects | Datasets | Experiments | Leaderboard        │
+└────────────────────────┬────────────────────────────────┘
+                         │ REST API
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│                 Backend (Flask)                          │
+│  API • Job Management • MLflow Integration              │
+└─────┬──────────────────┬──────────────┬────────────────┘
+      │                  │              │
+      ▼                  ▼              ▼
+  PostgreSQL          Redis          MLflow
+  (Metadata)       (Queue/Cache)   (Experiments)
+      │                  │              │
+      └──────────┬───────┴──────────────┘
+                 ▼
+      ┌──────────────────────┐
+      │   Celery Workers     │
+      │  - Training (GPU)    │
+      │  - Preprocessing     │
+      │  - Evaluation        │
+      └──────────────────────┘
 ```
 
-## Installation
+## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.8+
-- Node.js 16+
-- NVIDIA GPU with CUDA support (recommended)
-- DGX Spark system (or any CUDA-capable system)
 
-### Backend Setup
+- Docker & Docker Compose
+- NVIDIA GPU with CUDA 11.8+ (for training)
+- 16GB+ RAM recommended
+- 50GB+ disk space
 
-1. **Create a Python virtual environment**:
+### Installation
+
+1. **Clone the repository**
 ```bash
-cd /home/claude/dgx-ai-trainer/backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+git clone https://github.com/def1ant1/SparkTrainer.git
+cd SparkTrainer
 ```
 
-2. **Install Python dependencies**:
+2. **Start infrastructure services**
+```bash
+docker-compose up -d postgres redis mlflow
+```
+
+3. **Initialize database**
+```bash
+cd backend
+python init_db.py --sample-data
+```
+
+4. **Install Python dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Start the Flask API server**:
+5. **Start backend & workers**
 ```bash
-python app.py
+# Terminal 1: Backend
+python backend/app.py
+
+# Terminal 2: Celery Worker
+celery -A backend.celery_app.celery worker --loglevel=info --concurrency=2
 ```
 
-The API server will start on `http://localhost:5000`
-
-### Frontend Setup
-
-1. **Install Node.js dependencies**:
+6. **Start frontend (development)**
 ```bash
-cd /home/claude/dgx-ai-trainer/frontend
+cd frontend
 npm install
-```
-
-2. **Start the development server**:
-```bash
 npm run dev
 ```
 
-The web interface will be available at `http://localhost:3000`
+### Access UIs
 
-### Docker Compose (nginx + containers)
+- **Frontend**: http://localhost:3000
+- **MLflow**: http://localhost:5001
+- **Flower** (Celery monitoring): http://localhost:5555
+- **Backend API**: http://localhost:5000/api
 
-Run the full stack via Docker with nginx as a reverse proxy:
+## 📖 Usage
 
-```
-docker compose up --build
-```
+### 1. Create a Project
 
-- Open http://localhost to access the UI (nginx proxies `/` to the frontend and `/api` to the backend).
-- GPU: Compose requests GPU access with `gpus: all`. Ensure NVIDIA Container Toolkit is installed and `docker info` shows `Runtimes: nvidia`.
-- Training scripts and data directories are mapped as volumes:
-  - `./training_scripts` → `/app/training_scripts`
-  - `./jobs` → `/app/jobs`
-  - `./models` → `/app/models`
-  - `./logs` → `/app/logs`
+Navigate to **Projects** → **New Project**
+- Enter project name and description
+- Projects group related datasets and experiments
 
-Notes:
-- The frontend uses relative `/api` calls by default, so no extra configuration is needed for nginx.
-- The backend Docker image installs CUDA 12.1 PyTorch wheels and sets `DGX_TRAINER_BASE_DIR=/app` to align paths.
+### 2. Ingest Dataset
 
-## Usage Guide
+Go to **Dataset Wizard**:
 
-### 1. Dashboard
-Access the dashboard to view:
-- Number of available GPUs
-- Running and queued jobs
-- GPU memory utilization
-- Saved models
+**Step 1**: Upload videos (drag-drop or folder select)
 
-### 2. Creating a Training Job
+**Step 2**: Configure processing
+- FPS: 1-30 frames/second
+- Resolution: e.g., 224x224
+- Audio: Enable transcription (Whisper)
+- Captioning: Choose backend (BLIP-2, InternVL, etc.)
+- Scene detection: Optional
 
-#### Training from Scratch
-1. Click "Create New Training Job"
-2. Select "Train from Scratch"
-3. Choose a framework (PyTorch, TensorFlow, or Hugging Face)
-4. Configure model parameters:
-   - **Epochs**: Number of training iterations
-   - **Batch Size**: Samples per training step
-   - **Learning Rate**: Optimization step size
-   - **Architecture**: Model structure (custom, ResNet, etc.)
-   - **Hidden Layers**: Network depth and width
-   - **Number of Classes**: Output dimension
+**Step 3**: Integrity check
+- Validates video files
+- Detects corruption
+- Shows duration, size, format
 
-5. Click "Create Training Job"
+**Step 4**: Start processing
+- Extracts frames, audio
+- Generates captions, transcripts
+- Creates manifest.jsonl
 
-#### Fine-tuning a Model
-1. Click "Create New Training Job"
-2. Select "Fine-tune"
-3. Choose a framework
-4. Specify base model:
-   - PyTorch: `resnet18`, `resnet50`, `vgg16`, etc.
-   - Hugging Face: `bert-base-uncased`, `gpt2`, etc.
-5. Configure fine-tuning parameters:
-   - Lower learning rate (e.g., 0.0001)
-   - Smaller number of epochs
-   - Optional layer freezing
+### 3. Train a Model
 
-6. Click "Create Training Job"
+#### Option A: Using LoRA Recipe
 
-### 3. Monitoring Jobs
-
-View all jobs from the Jobs page:
-- **Status tracking**: queued, running, completed, failed, cancelled
-- **Real-time logs**: View training output and metrics
-- **Job details**: Configuration, timestamps, and results
-- **Cancel running jobs**: Stop jobs if needed
-
-### 4. Using Trained Models
-
-After training completes, models are saved in `/home/claude/dgx-ai-trainer/models/{job_id}/`:
-- `model.pth` or `best_model.pth`: Model weights
-- `config.json`: Model configuration and metadata
-
-Load models for inference:
 ```python
-import torch
+from spark_trainer.recipes.lora_recipes import create_lora_recipe
 
-# Load PyTorch model
-checkpoint = torch.load('models/{job_id}/model.pth')
-model.load_state_dict(checkpoint['model_state_dict'])
-
-# Load Hugging Face model
-from transformers import AutoModelForSequenceClassification
-model = AutoModelForSequenceClassification.from_pretrained('models/{job_id}')
-```
-
-## API Reference
-
-### Endpoints
-
-#### System Information
-```
-GET /api/health
-GET /api/system/info
-GET /api/frameworks
-```
-
-#### Job Management
-```
-GET /api/jobs              # List all jobs
-GET /api/jobs/{id}         # Get job details
-POST /api/jobs             # Create new job
-POST /api/jobs/{id}/cancel # Cancel job
-```
-
-#### Models
-```
-GET /api/models            # List saved models
-```
-
-### Job Configuration Schema
-
-```json
-{
-  "name": "My Training Job",
-  "type": "train",  // or "finetune"
-  "framework": "pytorch",  // pytorch, tensorflow, huggingface
-  "config": {
-    "epochs": 10,
-    "batch_size": 32,
-    "learning_rate": 0.001,
-    "architecture": "custom",
-    "input_size": 784,
-    "output_size": 10,
-    "hidden_layers": [512, 256, 128],
-    "num_classes": 10,
-    
-    // Fine-tuning specific
-    "model_name": "resnet18",
-    "freeze_layers": true,
-    "use_scheduler": true
-  }
+config = {
+    "base_model": "meta-llama/Llama-2-7b-hf",
+    "dataset_name": "timdettmers/openassistant-guanaco",
+    "lora_r": 8,
+    "lora_alpha": 16,
+    "learning_rate": 2e-4,
+    "num_epochs": 3,
+    "batch_size": 4,
+    "output_dir": "./lora_output"
 }
+
+recipe = create_lora_recipe(config, use_qlora=True)  # 4-bit QLoRA
+recipe.run()
 ```
 
-## Advanced Configuration
+#### Option B: Via UI
 
-### Custom Model Architectures
+1. Navigate to **Experiments**
+2. Click **New Experiment**
+3. Select:
+   - Project
+   - Dataset
+   - Model type
+   - Recipe (LoRA, Vision-Language, etc.)
+4. Configure hyperparameters
+5. Start training
 
-Modify `training_scripts/train_pytorch.py` to add custom architectures:
+Training job will:
+- Queue on Celery
+- Execute on GPU worker
+- Log to MLflow
+- Stream metrics real-time
+- Save artifacts on completion
 
-```python
-class MyCustomModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        # Define your architecture
-        pass
-    
-    def forward(self, x):
-        # Define forward pass
-        pass
-```
+### 4. Evaluate Models
 
-### Data Loading
+#### MMLU (Language Models)
 
-Replace dummy data in training scripts with your actual datasets:
-
-```python
-from torch.utils.data import Dataset, DataLoader
-
-class MyDataset(Dataset):
-    def __init__(self, data_path):
-        # Load your data
-        pass
-    
-    def __getitem__(self, idx):
-        # Return sample
-        pass
-
-# In training script
-dataset = MyDataset('/path/to/data')
-train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-```
-
-### Distributed Training
-
-For multi-GPU training on DGX Spark:
-
-```python
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel
-
-# Initialize distributed training
-dist.init_process_group(backend='nccl')
-model = DistributedDataParallel(model)
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **CUDA out of memory**
-   - Reduce batch size
-   - Use gradient accumulation
-   - Enable mixed precision training
-
-2. **Job stuck in queue**
-   - Check backend logs: `tail -f logs/{job_id}.log`
-   - Verify GPU availability: `nvidia-smi`
-   - Restart backend server
-
-3. **Connection errors**
-   - Ensure backend is running on port 5000
-   - Check firewall settings
-   - Verify API_BASE URL in frontend
-
-## Performance Optimization
-
-### For DGX Spark Systems
-
-1. **Enable TensorFloat-32 (TF32)**:
-```python
-torch.backends.cuda.matmul.allow_tf32 = True
-```
-
-2. **Use mixed precision training**:
-```python
-from torch.cuda.amp import autocast, GradScaler
-scaler = GradScaler()
-
-with autocast():
-    output = model(input)
-    loss = criterion(output, target)
-```
-
-3. **Optimize data loading**:
-```python
-train_loader = DataLoader(
-    dataset,
-    batch_size=batch_size,
-    num_workers=4,
-    pin_memory=True
-)
-```
-
-## Production Deployment
-
-For production use on DGX Spark:
-
-1. **Use a production WSGI server**:
 ```bash
-pip install gunicorn
-gunicorn -w 4 -b 0.0.0.0:5000 backend.app:app
+python -m spark_trainer.evaluation.mmlu_eval \
+    --model-path ./lora_output \
+    --output-dir ./eval_results \
+    --num-fewshot 5 \
+    --subjects abstract_algebra astronomy biology
 ```
 
-2. **Set up process management**:
+#### COCO (Vision Models)
+
 ```bash
-# Using systemd
-sudo systemctl enable dgx-ai-trainer
-sudo systemctl start dgx-ai-trainer
+python -m spark_trainer.evaluation.coco_eval \
+    --model-path Salesforce/blip2-opt-2.7b \
+    --task captioning \
+    --max-samples 1000 \
+    --output-dir ./eval_results
 ```
 
-3. **Configure reverse proxy** (nginx):
-```nginx
-location /api {
-    proxy_pass http://localhost:5000;
-}
+Evaluation results automatically:
+- Save to database
+- Update leaderboard
+- Log to MLflow
 
-location / {
-    proxy_pass http://localhost:3000;
-}
+### 5. View Leaderboard
+
+Navigate to **Leaderboard** to see:
+- Top models across benchmarks
+- Rankings with medals (🥇🥈🥉)
+- Filtering by benchmark type
+- Export to CSV
+
+## 🛠️ Configuration
+
+### Environment Variables
+
+Create `.env` file:
+
+```bash
+# Database
+DATABASE_URL=postgresql://sparktrainer:password@localhost:5432/sparktrainer
+
+# Redis
+REDIS_URL=redis://localhost:6379/0
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/0
+
+# MLflow
+MLFLOW_TRACKING_URI=http://localhost:5001
+
+# Training
+DGX_TRAINER_BASE_DIR=/app
+CUDA_VISIBLE_DEVICES=0,1,2,3
+
+# Flask
+FLASK_ENV=development
+SECRET_KEY=your-secret-key
 ```
 
-## Security Considerations
+### Training Configuration
 
-- Enable authentication/authorization for production
-- Use HTTPS for all communications
-- Implement rate limiting
-- Validate all user inputs
-- Secure model checkpoints and logs
+See `configs/` directory for examples:
+- `train_vl_example.yaml`: Vision-language training
+- `train_diffusion_example.yaml`: Diffusion models
+- `deepspeed_zero2.json`: DeepSpeed ZeRO-2 config
+- `deepspeed_zero3.json`: DeepSpeed ZeRO-3 config
 
-## Contributing
+## 📚 Documentation
 
-To extend this system:
+- **[FEATURES.md](FEATURES.md)**: Comprehensive feature documentation
+- **[API Documentation](docs/api.md)**: REST API reference
+- **[Recipe Guide](docs/recipes.md)**: Creating custom recipes
+- **[Deployment Guide](docs/deployment.md)**: Production deployment
 
-1. Add new frameworks: Create training scripts in `training_scripts/`
-2. Add new architectures: Extend model classes in training scripts
-3. Enhance UI: Add components to `frontend/src/`
-4. Add metrics: Update job tracking in `backend/app.py`
+## 🧪 Testing
 
-## License
+```bash
+# Run all tests
+pytest
 
-This project is provided as-is for use on NVIDIA DGX systems.
+# With coverage
+pytest --cov=src/spark_trainer --cov-report=html
 
-## Support
+# Specific test
+pytest tests/test_lora_recipes.py
+```
 
-For issues related to:
-- **DGX Spark hardware**: Contact NVIDIA support
-- **Application bugs**: Check logs in `/home/claude/dgx-ai-trainer/logs/`
-- **Training issues**: Review training script output
+## 🤝 Contributing
 
-## Acknowledgments
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-Built with:
-- React + Vite + Tailwind CSS
-- Flask + PyTorch + Transformers
-- NVIDIA CUDA and cuDNN
+**Ways to contribute**:
+- Add new recipes
+- Implement evaluation benchmarks
+- Improve documentation
+- Report bugs
+- Request features
+
+## 📊 Project Statistics
+
+- **Backend**: Flask + SQLAlchemy + Celery
+- **Frontend**: 22+ React components
+- **Trainers**: 3 main classes + recipe system
+- **Recipes**: 10+ pre-built recipes
+- **Evaluations**: MMLU (57 subjects), COCO (3 tasks)
+- **Storage**: PostgreSQL + MLflow + Redis
+- **Deployment**: Docker Compose with GPU support
+
+## 🎯 Roadmap
+
+- [ ] WebSocket live metrics streaming
+- [ ] User authentication & teams
+- [ ] Hyperparameter optimization (Optuna)
+- [ ] Model deployment (vLLM, TGI)
+- [ ] More evaluation benchmarks
+- [ ] Kubernetes deployment
+- [ ] Model quantization pipelines
+- [ ] Dataset versioning (DVC/LakeFS)
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- HuggingFace Transformers team
+- MLflow contributors
+- Celery & Redis communities
+- PyTorch team
+- OpenAI Whisper
+- BLIP-2, InternVL, Qwen2-VL teams
+
+## 🔗 Links
+
+- **GitHub**: https://github.com/def1ant1/SparkTrainer
+- **Issues**: https://github.com/def1ant1/SparkTrainer/issues
+- **Discussions**: https://github.com/def1ant1/SparkTrainer/discussions
+
+---
+
+**Built with ❤️ for the ML community**
+
+For questions or support, open an issue or start a discussion on GitHub.
