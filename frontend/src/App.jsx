@@ -42,7 +42,8 @@ const api = {
   updateModelMetadata: (id, payload) => fetch(`${API_BASE}/models/${id}/metadata`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r => r.json()),
   updateModelCard: (id, payload) => fetch(`${API_BASE}/models/${id}/card`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r => r.json()),
   bulkDeleteModels: (ids) => fetch(`${API_BASE}/models/bulk_delete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})}).then(r => r.json()),
-  exportModelsUrl: (ids) => `${API_BASE}/models/export?ids=${ids.join(',')}`
+  exportModelsUrl: (ids) => `${API_BASE}/models/export?ids=${ids.join(',')}`,
+  saveModel: (payload) => fetch(`${API_BASE}/models/save`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r => r.json())
 };
 // Extended API for wizard
 api.validateJob = (payload) => fetch(`${API_BASE}/jobs/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(async r => r.json());
@@ -1454,7 +1455,7 @@ export default function App() {
         )}
         {currentPage === 'builder' && (
           <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
-            <ArchitectureBuilder />
+            <ArchitectureBuilder api={api} />
           </PageWithSidebars>
         )}
         {currentPage === 'models' && !modelView.id && modelView.compareIds.length===0 && (

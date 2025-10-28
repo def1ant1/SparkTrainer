@@ -504,7 +504,14 @@ def get_video_stats(manifest_path: str) -> Dict[str, Any]:
 
     with open(manifest_path, 'r') as f:
         for line in f:
-            record = json.loads(line)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as e:
+                stats['errors'] += 1
+                continue
             stats['total_videos'] += 1
 
             if 'metadata_error' in record:
