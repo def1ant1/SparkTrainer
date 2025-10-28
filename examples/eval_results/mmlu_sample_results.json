@@ -1,0 +1,99 @@
+{
+  "evaluation_id": "eval-mmlu-20240115-103045",
+  "model_name": "Llama-7B-Finetuned",
+  "model_path": "outputs/llama-7b-finetuned",
+  "benchmark": "mmlu",
+  "timestamp": "2024-01-15T10:30:45Z",
+  "overall_accuracy": 0.652,
+  "total_questions": 1500,
+  "correct_answers": 978,
+  "subjects": {
+    "abstract_algebra": {
+      "accuracy": 0.31,
+      "total": 100,
+      "correct": 31
+    },
+    "anatomy": {
+      "accuracy": 0.63,
+      "total": 135,
+      "correct": 85
+    },
+    "astronomy": {
+      "accuracy": 0.66,
+      "total": 152,
+      "correct": 100
+    },
+    "college_biology": {
+      "accuracy": 0.72,
+      "total": 144,
+      "correct": 104
+    },
+    "college_chemistry": {
+      "accuracy": 0.45,
+      "total": 100,
+      "correct": 45
+    },
+    "college_computer_science": {
+      "accuracy": 0.73,
+      "total": 100,
+      "correct": 73
+    },
+    "college_mathematics": {
+      "accuracy": 0.38,
+      "total": 100,
+      "correct": 38
+    },
+    "college_physics": {
+      "accuracy": 0.42,
+      "total": 102,
+      "correct": 43
+    },
+    "computer_security": {
+      "accuracy": 0.74,
+      "total": 100,
+      "correct": 74
+    },
+    "conceptual_physics": {
+      "accuracy": 0.59,
+      "total": 235,
+      "correct": 139
+    }
+  },
+  "categories": {
+    "STEM": {
+      "accuracy": 0.587,
+      "subjects": 19,
+      "total_questions": 750,
+      "correct": 440
+    },
+    "Humanities": {
+      "accuracy": 0.682,
+      "subjects": 13,
+      "total_questions": 400,
+      "correct": 273
+    },
+    "Social Sciences": {
+      "accuracy": 0.75,
+      "subjects": 12,
+      "total_questions": 250,
+      "correct": 188
+    },
+    "Other": {
+      "accuracy": 0.77,
+      "subjects": 13,
+      "total_questions": 100,
+      "correct": 77
+    }
+  },
+  "config": {
+    "num_shots": 5,
+    "temperature": 0.0,
+    "max_tokens": 1,
+    "batch_size": 8
+  },
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_type": "NVIDIA A100-SXM4-80GB",
+    "total_time_seconds": 3247.5
+  }
+}
