@@ -34,6 +34,21 @@ scipy>=1.11.0
 # Web framework (backend)
 Flask>=3.0.0
 Flask-CORS>=4.0.0
+Flask-SocketIO>=5.3.0
+
+# Task queue and caching
+celery>=5.3.0
+redis>=5.0.0
+flower>=2.0.0  # Celery monitoring
+
+# Database
+SQLAlchemy>=2.0.0
+alembic>=1.12.0
+psycopg2-binary>=2.9.0
+
+# Experiment tracking
+mlflow>=2.9.0
+boto3>=1.28.0  # For S3 artifact storage
 
 # Testing
 pytest>=7.3.0

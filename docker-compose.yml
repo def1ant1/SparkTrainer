@@ -1,6 +1,63 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: sparktrainer-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=sparktrainer
+      - POSTGRES_USER=sparktrainer
+      - POSTGRES_PASSWORD=sparktrainer_dev_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sparktrainer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: sparktrainer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MLflow Tracking Server
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.9.2
+    container_name: sparktrainer-mlflow
+    ports:
+      - "5001:5000"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=postgresql://sparktrainer:sparktrainer_dev_pass@postgres:5432/sparktrainer
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://sparktrainer:sparktrainer_dev_pass@postgres:5432/sparktrainer
+      --default-artifact-root /mlflow/artifacts
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -13,12 +70,70 @@ services:
       - ./models:/app/models
       - ./logs:/app/logs
       - ./training_scripts:/app/training_scripts
+      - ./src:/app/src
     environment:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
       - DGX_TRAINER_BASE_DIR=/app
+      - DATABASE_URL=postgresql://sparktrainer:sparktrainer_dev_pass@postgres:5432/sparktrainer
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     # Enable GPU access with modern Compose
     gpus: all
+    restart: unless-stopped
+
+  # Celery Worker for Training Jobs
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sparktrainer-celery-worker
+    command: celery -A celery_app.celery worker --loglevel=info --concurrency=2
+    volumes:
+      - ./jobs:/app/jobs
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./training_scripts:/app/training_scripts
+      - ./src:/app/src
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DGX_TRAINER_BASE_DIR=/app
+      - DATABASE_URL=postgresql://sparktrainer:sparktrainer_dev_pass@postgres:5432/sparktrainer
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Enable GPU access with modern Compose
+    gpus: all
+    restart: unless-stopped
+
+  # Flower - Celery Monitoring
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sparktrainer-flower
+    command: celery -A celery_app.celery flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - celery-worker
     restart: unless-stopped
 
   frontend:
@@ -45,6 +160,9 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres_data:
+  redis_data:
+  mlflow_artifacts:
   jobs:
   models:
   logs:
