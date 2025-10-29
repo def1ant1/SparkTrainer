@@ -619,9 +619,9 @@ export default function ArchitectureBuilder({ api }) {
   }, {});
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] gap-4 p-4 overflow-hidden">
+    <div className="flex h-[calc(100vh-4rem)] gap-4 overflow-hidden">
       {/* Left Sidebar - Organized Palette */}
-      <div className="w-64 flex flex-col gap-3 overflow-y-auto">
+      <div className="w-56 flex flex-col gap-3 overflow-y-auto p-4 bg-surface border-r border-border">
         <div className="p-3 border border-border rounded bg-surface">
           <div className="text-sm font-semibold mb-2">Templates</div>
           <div className="space-y-1">
@@ -717,7 +717,7 @@ export default function ArchitectureBuilder({ api }) {
       </div>
 
       {/* Center Canvas - Figma-like */}
-      <div className="flex-1 flex flex-col gap-2">
+      <div className="flex-1 flex flex-col gap-2 p-4">
         <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface border border-border rounded">
           <div className="flex items-center gap-2 text-xs">
             <button className="px-2 py-1 border border-border rounded hover:bg-muted" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>Reset View</button>
@@ -785,7 +785,7 @@ export default function ArchitectureBuilder({ api }) {
       </div>
 
       {/* Right Sidebar - Inspector */}
-      <div className="w-80 flex flex-col gap-3 overflow-y-auto">
+      <div className="w-64 flex flex-col gap-3 overflow-y-auto p-4 bg-surface border-l border-border">
         <div className="p-3 border border-border rounded bg-surface">
           <div className="text-sm font-semibold mb-2">Global Settings</div>
           <div className="grid grid-cols-2 gap-2 text-sm">
