@@ -133,13 +133,168 @@ class Dataset(Base):
     )
 
 
+class BaseModel(Base):
+    """Base model registry for fine-tuning and training."""
+    __tablename__ = "base_models"
+
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False)
+    family = Column(String(100), nullable=False)  # llama, mistral, gpt, bert, vit, etc.
+    description = Column(Text, nullable=True)
+
+    # Model properties
+    params_b = Column(Float, nullable=True)  # Parameters in billions
+    dtype = Column(String(20), nullable=False)  # fp32, fp16, bf16, int8, int4
+    context_length = Column(Integer, nullable=True)
+    hidden_size = Column(Integer, nullable=True)
+    num_layers = Column(Integer, nullable=True)
+
+    # Model architecture
+    architecture = Column(String(100), nullable=True)  # transformer, cnn, vit, etc.
+    modality = Column(String(50), nullable=False)  # text, image, audio, multimodal
+
+    # Capabilities
+    trainable = Column(Boolean, default=True)
+    servable = Column(Boolean, default=True)
+    quantized = Column(Boolean, default=False)
+    is_gguf = Column(Boolean, default=False)
+
+    # Stage and status
+    stage = Column(String(20), default="staging")  # staging, production, archived
+    status = Column(String(20), default="active")  # active, deprecated, archived
+
+    # Storage
+    storage_path = Column(String(500), nullable=False)
+    size_bytes = Column(Integer, default=0)
+    checksum = Column(String(64), nullable=True)
+
+    # HuggingFace integration
+    hf_repo_id = Column(String(255), nullable=True)
+    hf_revision = Column(String(64), nullable=True)
+
+    # Tokenizer info
+    tokenizer_path = Column(String(500), nullable=True)
+    vocab_size = Column(Integer, nullable=True)
+
+    # Metadata
+    tags = Column(JSON, default=[])
+    metadata = Column(JSON, default={})
+    model_card = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    experiments = relationship("Experiment", back_populates="base_model")
+
+    __table_args__ = (
+        Index("idx_base_model_name", "name"),
+        Index("idx_base_model_family", "family"),
+        Index("idx_base_model_stage", "stage"),
+        Index("idx_base_model_modality", "modality"),
+    )
+
+
+class Recipe(Base):
+    """Training recipe templates (LoRA, QLoRA, Full-FT, etc.)."""
+    __tablename__ = "recipes"
+
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False, unique=True)
+    display_name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Recipe properties
+    recipe_type = Column(String(50), nullable=False)  # lora, qlora, full_ft, prompt_tuning, etc.
+    modality = Column(String(50), nullable=False)  # text, image, audio, multimodal
+    train_styles = Column(JSON, default=[])  # ["qlora","lora","full"]
+
+    # Default configuration
+    default_config = Column(JSON, default={})  # Default hyperparameters
+    required_fields = Column(JSON, default=[])  # Required config fields
+    optional_fields = Column(JSON, default=[])  # Optional config fields
+
+    # Compatibility
+    supported_architectures = Column(JSON, default=[])  # ["transformer", "cnn", etc.]
+    min_gpu_memory_gb = Column(Float, nullable=True)
+    supports_distributed = Column(Boolean, default=True)
+
+    # Template
+    template_path = Column(String(500), nullable=True)
+    script_template = Column(Text, nullable=True)
+
+    # Metadata
+    tags = Column(JSON, default=[])
+    metadata = Column(JSON, default={})
+    is_active = Column(Boolean, default=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    experiments = relationship("Experiment", back_populates="recipe")
+
+    __table_args__ = (
+        Index("idx_recipe_type", "recipe_type"),
+        Index("idx_recipe_modality", "modality"),
+        Index("idx_recipe_active", "is_active"),
+    )
+
+
+class Adapter(Base):
+    """Adapter/LoRA registry with composition support."""
+    __tablename__ = "adapters"
+
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False)
+    base_model_id = Column(String(36), ForeignKey("base_models.id"), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Adapter properties
+    adapter_type = Column(String(50), nullable=False)  # lora, qlora, ia3, prompt_tuning, etc.
+    rank = Column(Integer, nullable=True)  # LoRA rank (r)
+    alpha = Column(Integer, nullable=True)  # LoRA alpha
+    dropout = Column(Float, default=0.0)
+    target_modules = Column(JSON, default=[])  # ["q_proj", "v_proj", etc.]
+
+    # Status
+    status = Column(String(20), default="training")  # training, ready, archived
+    training_experiment_id = Column(String(36), nullable=True)
+
+    # Storage
+    storage_path = Column(String(500), nullable=False)
+    size_bytes = Column(Integer, default=0)
+    checksum = Column(String(64), nullable=True)
+
+    # Performance metrics
+    metrics = Column(JSON, default={})  # Final metrics from training
+
+    # Metadata
+    tags = Column(JSON, default=[])
+    metadata = Column(JSON, default={})
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("idx_adapter_base_model", "base_model_id"),
+        Index("idx_adapter_type", "adapter_type"),
+        Index("idx_adapter_status", "status"),
+    )
+
+
 class Experiment(Base):
-    """Experiment tracking with MLflow integration."""
+    """Experiment tracking with MLflow integration and comprehensive configuration."""
     __tablename__ = "experiments"
 
     id = Column(String(36), primary_key=True)
     project_id = Column(String(36), ForeignKey("projects.id"), nullable=False)
     dataset_id = Column(String(36), ForeignKey("datasets.id"), nullable=True)
+    base_model_id = Column(String(36), ForeignKey("base_models.id"), nullable=True)
+    recipe_id = Column(String(36), ForeignKey("recipes.id"), nullable=True)
 
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
@@ -168,6 +323,15 @@ class Experiment(Base):
     config = Column(JSON, default={})
     hyperparameters = Column(JSON, default={})
 
+    # New: Comprehensive experiment specification
+    adapters = Column(JSON, default=[])  # [{adapter_id, mode:"attach"|"compose"}]
+    train = Column(JSON, default={})  # {max_steps, global_batch_size, grad_accum, lr, seed, checkpoint_interval}
+    strategy = Column(JSON, default={})  # {type:"ddp"|"fsdp"|"deepspeed", mixed_precision:"bf16"|"fp16"}
+    resources = Column(JSON, default={})  # {gpus:int, partition_id?:uuid}
+    eval = Column(JSON, default={})  # {suites:[...], interval:int}
+    export = Column(JSON, default=[])  # ["safetensors","onnx","gguf"]
+    preflight_summary = Column(JSON, default={})  # {ok, estimated_vram_mb, time_per_step_ms, warnings[], errors[]}
+
     # Model output
     model_path = Column(String(500), nullable=True)
     checkpoint_path = Column(String(500), nullable=True)
@@ -186,12 +350,17 @@ class Experiment(Base):
     # Relationships
     project = relationship("Project", back_populates="experiments")
     dataset = relationship("Dataset", back_populates="experiments")
+    base_model = relationship("BaseModel", back_populates="experiments")
+    recipe = relationship("Recipe", back_populates="experiments")
     jobs = relationship("Job", back_populates="experiment", cascade="all, delete-orphan")
     artifacts = relationship("Artifact", back_populates="experiment", cascade="all, delete-orphan")
     evaluations = relationship("Evaluation", back_populates="experiment", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_experiment_project", "project_id"),
+        Index("idx_experiment_base_model", "base_model_id"),
+        Index("idx_experiment_dataset", "dataset_id"),
+        Index("idx_experiment_recipe", "recipe_id"),
         Index("idx_experiment_mlflow_run", "mlflow_run_id"),
         Index("idx_experiment_status", "status"),
     )
@@ -553,6 +722,9 @@ class LeaderboardEntry(Base):
 # Event listeners for automatic timestamp updates
 @event.listens_for(Project, 'before_update')
 @event.listens_for(Dataset, 'before_update')
+@event.listens_for(BaseModel, 'before_update')
+@event.listens_for(Recipe, 'before_update')
+@event.listens_for(Adapter, 'before_update')
 @event.listens_for(Experiment, 'before_update')
 @event.listens_for(Job, 'before_update')
 @event.listens_for(Artifact, 'before_update')
