@@ -1412,7 +1412,6 @@ export default function App() {
           <ThemeToggle />
           <UserMenu />
         </HeaderBar>
-        <SecondaryNav currentPage={currentPage} onNavigate={setCurrentPage} />
         <main className="max-w-7xl mx-auto px-4 py-6 w-full">
           <PageTransition>
         {currentPage === 'dashboard' && (
@@ -1454,9 +1453,7 @@ export default function App() {
           </PageWithSidebars>
         )}
         {currentPage === 'builder' && (
-          <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
-            <ArchitectureBuilder api={api} />
-          </PageWithSidebars>
+          <ArchitectureBuilder api={api} />
         )}
         {currentPage === 'models' && !modelView.id && modelView.compareIds.length===0 && (
           <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>

@@ -25,6 +25,7 @@ export default function ProfilePage() {
     hf_token: '',
     openai_api_key: '',
     wandb_api_key: '',
+    pinecone_api_key: '',
     default_framework: 'pytorch',
     auto_save_interval: 300,
     notification_enabled: true,
@@ -643,6 +644,18 @@ export default function ProfilePage() {
                 placeholder="..."
               />
               <p className="text-xs text-text/60 mt-1">Enable automatic experiment tracking with W&B</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Pinecone API Key</label>
+              <input
+                type="password"
+                className="w-full border border-border rounded px-3 py-2 bg-surface font-mono text-sm"
+                value={settings.pinecone_api_key || ''}
+                onChange={e => setSettings({ ...settings, pinecone_api_key: e.target.value })}
+                placeholder="..."
+              />
+              <p className="text-xs text-text/60 mt-1">Used for vector storage and similarity search</p>
             </div>
           </div>
 
