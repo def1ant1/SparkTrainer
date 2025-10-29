@@ -10,7 +10,7 @@ import { ModelsPage, ModelDetail, ModelCompare } from './components/Models';
 import { DatasetsPage } from './components/Datasets';
 import ExperimentsPage from './components/Experiments';
 import PipelinesPage from './components/Pipelines';
-import ProfilePage from './components/Profile';
+const ProfilePage = React.lazy(() => import('./components/Profile'));
 import Labeling from './components/Labeling';
 
 // API Service
@@ -1533,7 +1533,9 @@ export default function App() {
         )}
         {currentPage === 'profile' && (
           <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
-            <ProfilePage />
+            <React.Suspense fallback={<div className="p-6">Loading profile...</div>}>
+              <ProfilePage />
+            </React.Suspense>
           </PageWithSidebars>
         )}
           </PageTransition>

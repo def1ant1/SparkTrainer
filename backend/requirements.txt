@@ -28,7 +28,9 @@ huggingface-hub==0.17.3
 datasets==2.14.6
 peft==0.7.1
 # bitsandbytes provides 8/4-bit quantization (Linux/CUDA environments)
-bitsandbytes==0.43.1
+# Make bitsandbytes optional and only on Linux x86_64 where wheels are provided.
+# Newer versions provide broader compatibility; gate by platform to avoid install failures on ARM/aarch64.
+bitsandbytes>=0.46.0; platform_system == 'Linux' and platform_machine == 'x86_64'
 
 # Hyperparameter optimization
 optuna==3.6.0
