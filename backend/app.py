@@ -2122,12 +2122,36 @@ def run_training_job(job_id):
         except Exception:
             pass
 
+def _is_dgx_spark() -> bool:
+    """Detect if this is a DGX Spark system by checking GPU model names.
+
+    DGX Spark typically has NVIDIA H200 or similar high-end GPUs.
+    """
+    try:
+        out = subprocess.check_output([
+            'nvidia-smi',
+            '--query-gpu=name',
+            '--format=csv,noheader'
+        ]).decode()
+        # Check for DGX Spark indicators: H200, H100, or explicit DGX naming
+        gpu_names = [line.strip().lower() for line in out.strip().split('\n')]
+        for name in gpu_names:
+            if any(marker in name for marker in ['h200', 'h100', 'dgx']):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _parse_gpu_info() -> Dict[str, Any]:
     """Read GPU info via nvidia-smi and compute memory percentages.
 
     Returns a dict with a 'gpus' list. If nvidia-smi is not available, returns an empty list.
+    Applies DGX Spark calibration: normalizes GPU 0 max power to 240W.
     """
     gpus = []
+    is_dgx_spark = _is_dgx_spark()
+
     try:
         # Ask for raw numbers (no units) to avoid parsing issues
         out = subprocess.check_output([
@@ -2168,6 +2192,11 @@ def _parse_gpu_info() -> Dict[str, Any]:
                 temp = to_int(temp_s)        # Celsius
                 p_draw = to_float_or_none(power_draw_s) if power_draw_s and power_draw_s not in ('N/A', '') else None
                 p_limit = to_float_or_none(power_limit_s) if power_limit_s and power_limit_s not in ('N/A', '') else None
+
+                # DGX Spark calibration: Normalize GPU 0 power limit to 240W
+                if is_dgx_spark and idx == 0 and p_limit is not None:
+                    p_limit = 240.0
+
                 used_pct = round((used / total) * 100, 1) if total > 0 else 0.0
                 free_pct = round((free / total) * 100, 1) if total > 0 else 0.0
                 gpus.append({
@@ -2182,6 +2211,7 @@ def _parse_gpu_info() -> Dict[str, Any]:
                     'temperature_gpu_c': temp,
                     'power_draw_w': p_draw,
                     'power_limit_w': p_limit,
+                    'is_dgx_spark': is_dgx_spark and idx == 0,  # Flag for UI
                 })
     except Exception:
         gpus = []
@@ -2192,6 +2222,7 @@ def _parse_gpu_info() -> Dict[str, Any]:
         'memory_total_mib': total_mem,
         'memory_used_mib': used_mem,
         'memory_used_pct': round((used_mem / total_mem) * 100, 1) if total_mem > 0 else 0.0,
+        'is_dgx_spark': is_dgx_spark,  # Include in summary for frontend
     }
     return summary
 
@@ -3619,7 +3650,10 @@ def hpo_studies_save():
 
 
 def _sample_metrics_once():
-    """Take one metrics sample and append to history."""
+    """Take one metrics sample and append to history.
+
+    Includes GPU utilization, memory, power draw, and temperature for sparklines.
+    """
     try:
         snap = _system_info_snapshot()
         ts = datetime.now().isoformat()
@@ -3629,12 +3663,17 @@ def _sample_metrics_once():
                 'index': g.get('index'),
                 'util_pct': g.get('utilization_gpu_pct'),
                 'mem_pct': g.get('memory_used_pct'),
+                'power_draw_w': g.get('power_draw_w'),
+                'power_limit_w': g.get('power_limit_w'),
+                'temperature_c': g.get('temperature_gpu_c'),
+                'is_dgx_spark': g.get('is_dgx_spark', False),
             })
         sample = {
             'ts': ts,
             'gpus': gpus,
             'gpu_mem_used_pct': snap.get('memory_used_pct'),
             'sys_mem_used_pct': (snap.get('memory') or {}).get('used_pct'),
+            'is_dgx_spark': snap.get('is_dgx_spark', False),
         }
         with _metrics_lock:
             _metrics_history.append(sample)
@@ -5262,6 +5301,139 @@ def huggingface_download_dataset():
                 'transfer_id': transfer_id,
                 'message': f'Queued download for {dataset_id}'
             })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/huggingface/export-model', methods=['POST'])
+def huggingface_export_model():
+    """Export a model to HuggingFace Hub"""
+    data = request.json or {}
+    model_id = data.get('model_id')
+    repo_name = data.get('repo_name')
+    hf_token = data.get('token')
+    private = data.get('private', False)
+    organization = data.get('organization')
+
+    if not model_id or not repo_name or not hf_token:
+        return jsonify({'error': 'model_id, repo_name, and token are required'}), 400
+
+    try:
+        from huggingface_exporter import HuggingFaceExporter
+
+        # Load model metadata
+        model_path = os.path.join(MODELS_DIR, model_id)
+        if not os.path.exists(model_path):
+            return jsonify({'error': f'Model {model_id} not found'}), 404
+
+        # Load model config and metadata
+        model_config = {}
+        training_config = {}
+        metrics = {}
+
+        config_path = os.path.join(model_path, 'config.json')
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                model_config = json.load(f)
+
+        metadata_path = os.path.join(model_path, 'metadata.json')
+        if os.path.exists(metadata_path):
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+                training_config = metadata.get('training_config', {})
+                metrics = metadata.get('metrics', {})
+
+        # Initialize exporter
+        exporter = HuggingFaceExporter(hf_token)
+
+        # Export model
+        result = exporter.export_model(
+            model_path=model_path,
+            repo_name=repo_name,
+            model_config=model_config,
+            training_config=training_config,
+            metrics=metrics,
+            private=private,
+            organization=organization
+        )
+
+        if result.get('status') == 'success':
+            return jsonify({
+                'status': 'ok',
+                'repo_url': result.get('repo_url'),
+                'message': 'Model exported successfully'
+            })
+        else:
+            return jsonify({
+                'error': result.get('error'),
+                'details': result.get('stderr')
+            }), 500
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/huggingface/export-dataset', methods=['POST'])
+def huggingface_export_dataset():
+    """Export a dataset to HuggingFace Hub"""
+    data = request.json or {}
+    dataset_name = data.get('dataset_name')
+    repo_name = data.get('repo_name')
+    hf_token = data.get('token')
+    private = data.get('private', False)
+    organization = data.get('organization')
+
+    if not dataset_name or not repo_name or not hf_token:
+        return jsonify({'error': 'dataset_name, repo_name, and token are required'}), 400
+
+    try:
+        from huggingface_exporter import HuggingFaceExporter
+
+        # Load dataset
+        dataset_path = _dataset_dir(dataset_name)
+        if not os.path.exists(dataset_path):
+            return jsonify({'error': f'Dataset {dataset_name} not found'}), 404
+
+        # Load dataset metadata
+        metadata_path = os.path.join(dataset_path, 'metadata.json')
+        dataset_config = {}
+        statistics = {}
+
+        if os.path.exists(metadata_path):
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+                dataset_config = metadata.get('config', {})
+                statistics = metadata.get('statistics', {})
+
+        # Compute statistics if not available
+        if not statistics:
+            statistics = _compute_dataset_stats(dataset_path)
+
+        # Initialize exporter
+        exporter = HuggingFaceExporter(hf_token)
+
+        # Export dataset
+        result = exporter.export_dataset(
+            dataset_path=dataset_path,
+            repo_name=repo_name,
+            dataset_config=dataset_config,
+            statistics=statistics,
+            private=private,
+            organization=organization
+        )
+
+        if result.get('status') == 'success':
+            return jsonify({
+                'status': 'ok',
+                'repo_url': result.get('repo_url'),
+                'message': 'Dataset exported successfully'
+            })
+        else:
+            return jsonify({
+                'error': result.get('error'),
+                'details': result.get('stderr')
+            }), 500
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

@@ -10,6 +10,7 @@ import { ModelsPage, ModelDetail, ModelCompare } from './components/Models';
 import { DatasetsPage } from './components/Datasets';
 import ExperimentsPage from './components/Experiments';
 import PipelinesPage from './components/Pipelines';
+import Documentation from './components/Documentation';
 const ProfilePage = React.lazy(() => import('./components/Profile'));
 import Labeling from './components/Labeling';
 
@@ -1307,6 +1308,7 @@ export default function App() {
   const [jobs, setJobs] = useState([]);
   const [hpoJobId, setHpoJobId] = useState(null);
   const [gpuSeries, setGpuSeries] = useState({}); // { [gpuIndex]: number[] }
+  const [powerSeries, setPowerSeries] = useState({}); // { [gpuIndex]: number[] } for power draw
   const [netSeries, setNetSeries] = useState({ rx: [], tx: [] });
   const userId = 'anonymous';
   const widgetKey = `dashboard.widgets:${userId}`;
@@ -1339,6 +1341,16 @@ export default function App() {
               gmap[k] = arr;
             });
             return gmap;
+          });
+          setPowerSeries(prev => {
+            const pmap = { ...prev };
+            (data.gpus || []).forEach(g => {
+              const k = String(g.index ?? 0);
+              const arr = (pmap[k] || []).slice(-119);
+              arr.push(g.power_draw_w ?? 0);
+              pmap[k] = arr;
+            });
+            return pmap;
           });
           setNetSeries(prev => {
             const rx = (prev.rx || []).slice(-119); rx.push(data.net?.rx_rate_bps || 0);
@@ -1432,6 +1444,7 @@ export default function App() {
             partitions={partitions}
             metrics={metrics}
             gpuSeries={gpuSeries}
+            powerSeries={powerSeries}
             netSeries={netSeries}
             widgetPrefs={widgetPrefs}
             setWidgetPrefs={setWidgetPrefs}
@@ -1537,6 +1550,9 @@ export default function App() {
               <ProfilePage />
             </React.Suspense>
           </PageWithSidebars>
+        )}
+        {currentPage === 'docs' && (
+          <Documentation onNavigate={setCurrentPage} />
         )}
           </PageTransition>
         </main>
@@ -1778,7 +1794,7 @@ function JobsTimeline({ metrics, partitions }) {
 }
 
 // New 3-column dashboard with widgets
-function Dashboard3Col({ onNavigate, systemInfo, partitions, metrics, gpuSeries, netSeries, widgetPrefs, setWidgetPrefs, jobs }) {
+function Dashboard3Col({ onNavigate, systemInfo, partitions, metrics, gpuSeries, powerSeries, netSeries, widgetPrefs, setWidgetPrefs, jobs }) {
   // Helpers reused from original dashboard
   const colorFor = (pct) => pct < 70 ? 'bg-green-500' : pct < 85 ? 'bg-yellow-500' : 'bg-red-500';
   const fmtGiB = (mib) => (mib != null ? (mib / 1024).toFixed(1) : '0.0');
@@ -1862,7 +1878,7 @@ function Dashboard3Col({ onNavigate, systemInfo, partitions, metrics, gpuSeries,
                 </div>
                 {w.id === 'gpu_spark' && <GPUSparklines systemInfo={systemInfo} gpuSeries={gpuSeries} />}
                 {w.id === 'temp_heat' && <GPUTemperatureHeatmap systemInfo={systemInfo} />}
-                {w.id === 'power' && <GPUPowerMeters systemInfo={systemInfo} />}
+                {w.id === 'power' && <GPUPowerMeters systemInfo={systemInfo} powerSeries={powerSeries} />}
                 {w.id === 'net' && <NetworkSpark netSeries={netSeries} />}
                 {w.id === 'gpu_status' && (
                   <div className="space-y-3">
@@ -2032,17 +2048,39 @@ function GPUTemperatureHeatmap({ systemInfo }){
   );
 }
 
-function GPUPowerMeters({ systemInfo }){
+function GPUPowerMeters({ systemInfo, powerSeries = {} }){
   const gpus = systemInfo.gpus||[];
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {gpus.map((g,i)=>{
         const p = g.power_draw_w ?? 0; const lim = g.power_limit_w || Math.max(p, 1);
         const pct = Math.min(100, Math.round((p/lim)*100));
+        const k = String(g.index ?? i);
+        const powerHistory = powerSeries[k] || [];
+        const isDgxSpark = g.is_dgx_spark || false;
         return (
-          <div key={i} className="text-xs">
-            <div className="flex justify-between mb-1"><span>GPU {g.index ?? i}</span><span>{p? p.toFixed(0):'-'}W / {lim? lim.toFixed(0):'-'}W</span></div>
-            <div className="w-full bg-muted rounded h-2"><div className="h-2 rounded" style={{ width: pct+'%', background: pct>85? '#ef4444' : pct>70? '#f59e0b' : '#22c55e' }} /></div>
+          <div key={i} className="text-xs space-y-1">
+            <div className="flex justify-between mb-1">
+              <span className="flex items-center gap-1">
+                GPU {g.index ?? i}
+                {isDgxSpark && <span className="text-[10px] bg-primary/20 text-primary px-1 rounded">DGX</span>}
+              </span>
+              <span>{p? p.toFixed(0):'-'}W / {lim? lim.toFixed(0):'-'}W</span>
+            </div>
+            <div className="w-full bg-muted rounded h-2">
+              <div className="h-2 rounded" style={{ width: pct+'%', background: pct>85? '#ef4444' : pct>70? '#f59e0b' : '#22c55e' }} />
+            </div>
+            {powerHistory.length > 0 && (
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-[10px] text-text/50 w-12">History</span>
+                <Sparkline
+                  data={powerHistory}
+                  color={pct>85? '#ef4444' : pct>70? '#f59e0b' : '#22c55e'}
+                  width={180}
+                  height={24}
+                />
+              </div>
+            )}
           </div>
         );
       })}
@@ -2460,6 +2498,7 @@ function Sidebar({ collapsed, setCollapsed, current, onNavigate }){
     { key: 'datasets', label: 'Datasets', icon: <Database size={18} /> },
     { key: 'labeling', label: 'Labeling', icon: <List size={18} /> },
     { key: 'profile', label: 'Profile', icon: <User size={18} /> },
+    { key: 'docs', label: 'Docs', icon: <List size={18} /> },
     { key: 'builder', label: 'Builder', icon: <Monitor size={18} /> },
     { key: 'wizard', label: 'Quick Start', icon: <List size={18} /> },
     { key: 'admin', label: 'Admin', icon: <Settings size={18} /> },
@@ -2550,6 +2589,8 @@ function Breadcrumbs({ currentPage, modelView, onNavigate }){
       add('settings','Settings'); add('settings_teams','Teams');
     } else if (currentPage === 'settings_billing') {
       add('settings','Settings'); add('settings_billing','Billing');
+    } else if (currentPage === 'docs') {
+      add('docs','Documentation');
     }
   }
   const pageKeys = new Set(['dashboard','jobs','experiments','pipelines','models','datasets','admin','wizard','create','builder','hpo','labeling']);
