@@ -5972,16 +5972,33 @@ def _estimate_memory_requirements(params: int | None, batch_size: int, seq_len: 
 
 @app.route('/api/models/<model_id>/resource/estimate', methods=['GET'])
 def model_resource_estimate(model_id):
-    base = _model_dir(model_id)
-    if not os.path.isdir(base):
-        return jsonify({'error': 'Model not found'}), 404
-    batch_size = int(request.args.get('batch_size') or 8)
-    seq_len = int(request.args.get('seq_len') or 2048)
-    training = (request.args.get('training') or '0') in ('1','true','yes')
-    precision = request.args.get('precision') or 'fp16'
-    est = _estimate_model_size_params(base)
-    mem = _estimate_memory_requirements(est.get('parameters'), batch_size, seq_len, training, precision)
-    return jsonify({'model': model_id, 'estimate': est, 'memory': mem})
+    try:
+        base = _model_dir(model_id)
+        if not os.path.isdir(base):
+            return jsonify({'error': 'Model not found'}), 404
+
+        # Safely parse integer inputs with validation
+        try:
+            batch_size = int(request.args.get('batch_size') or 8)
+            if batch_size <= 0 or batch_size > 10000:
+                return jsonify({'error': 'batch_size must be between 1 and 10000'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'batch_size must be a valid integer'}), 400
+
+        try:
+            seq_len = int(request.args.get('seq_len') or 2048)
+            if seq_len <= 0 or seq_len > 1000000:
+                return jsonify({'error': 'seq_len must be between 1 and 1000000'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'seq_len must be a valid integer'}), 400
+
+        training = (request.args.get('training') or '0') in ('1','true','yes')
+        precision = request.args.get('precision') or 'fp16'
+        est = _estimate_model_size_params(base)
+        mem = _estimate_memory_requirements(est.get('parameters'), batch_size, seq_len, training, precision)
+        return jsonify({'model': model_id, 'estimate': est, 'memory': mem})
+    except Exception as e:
+        return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
 
 
 @app.route('/api/gpu/partition/recommend', methods=['POST'])
@@ -5990,42 +6007,73 @@ def gpu_partition_recommend():
 
     JSON: { model_id?: string, params?: int, batch_size?: int, seq_len?: int, training?: bool }
     """
-    data = request.json or {}
-    params = data.get('params')
-    if not params and data.get('model_id'):
-        est = _estimate_model_size_params(_model_dir(_safe_name(data['model_id'])))
-        params = est.get('parameters')
-    batch_size = int(data.get('batch_size') or 8)
-    seq_len = int(data.get('seq_len') or 2048)
-    training = bool(data.get('training') or False)
-    mem = _estimate_memory_requirements(params, batch_size, seq_len, training)
-    need_gb = max(1, int(mem['total_bytes'] / (1024**3)))
-    # Pick profiles with >= need_gb, limited by 4 instances.
-    candidates = sorted(_MIG_PROFILE_MEM_GB.items(), key=lambda x: x[1])
-    cfg: Dict[str, int] = {}
-    for prof, gb in candidates:
-        if gb >= need_gb:
-            cfg[prof] = 1
-            break
-    if not cfg:
-        # too large: suggest full GPU (no MIG)
-        return jsonify({'config': {}, 'full_gpu': True, 'rationale': f'model needs ~{need_gb} GB; consider full GPU allocation'}), 200
-    # Try to fill remaining capacity with smaller profiles if asked for parallelism
-    parallel = int(data.get('parallel') or 1)
-    total = sum(cfg.values())
-    if parallel > 1:
-        small = '1g.5gb'
-        add = min(4-total, max(0, parallel-1))
-        if add > 0:
-            cfg[small] = cfg.get(small, 0) + add
-    # Cap to 4
-    while sum(cfg.values()) > 4:
-        # remove smallest
-        smallest = sorted(cfg.items(), key=lambda x: _MIG_PROFILE_MEM_GB.get(x[0], 0))[0][0]
-        cfg[smallest] -= 1
-        if cfg[smallest] <= 0:
-            del cfg[smallest]
-    return jsonify({'config': cfg, 'need_gb': need_gb, 'rationale': 'Heuristic based on parameter count and batch/seq settings'})
+    try:
+        data = request.json or {}
+        params = data.get('params')
+        if not params and data.get('model_id'):
+            model_id = data.get('model_id')
+            model_path = _model_dir(_safe_name(model_id))
+            if not os.path.isdir(model_path):
+                return jsonify({'error': f'Model not found: {model_id}'}), 404
+            est = _estimate_model_size_params(model_path)
+            params = est.get('parameters')
+
+        # Safely parse integer inputs with validation
+        try:
+            batch_size = int(data.get('batch_size') or 8)
+            if batch_size <= 0 or batch_size > 10000:
+                return jsonify({'error': 'batch_size must be between 1 and 10000'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'batch_size must be a valid integer'}), 400
+
+        try:
+            seq_len = int(data.get('seq_len') or 2048)
+            if seq_len <= 0 or seq_len > 1000000:
+                return jsonify({'error': 'seq_len must be between 1 and 1000000'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'seq_len must be a valid integer'}), 400
+
+        try:
+            parallel = int(data.get('parallel') or 1)
+            if parallel <= 0 or parallel > 8:
+                return jsonify({'error': 'parallel must be between 1 and 8'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'parallel must be a valid integer'}), 400
+
+        training = bool(data.get('training') or False)
+        mem = _estimate_memory_requirements(params, batch_size, seq_len, training)
+        need_gb = max(1, int(mem['total_bytes'] / (1024**3)))
+
+        # Pick profiles with >= need_gb, limited by 4 instances.
+        candidates = sorted(_MIG_PROFILE_MEM_GB.items(), key=lambda x: x[1])
+        cfg: Dict[str, int] = {}
+        for prof, gb in candidates:
+            if gb >= need_gb:
+                cfg[prof] = 1
+                break
+        if not cfg:
+            # too large: suggest full GPU (no MIG)
+            return jsonify({'config': {}, 'full_gpu': True, 'rationale': f'model needs ~{need_gb} GB; consider full GPU allocation'}), 200
+
+        # Try to fill remaining capacity with smaller profiles if asked for parallelism
+        total = sum(cfg.values())
+        if parallel > 1:
+            small = '1g.5gb'
+            add = min(4-total, max(0, parallel-1))
+            if add > 0:
+                cfg[small] = cfg.get(small, 0) + add
+
+        # Cap to 4
+        while sum(cfg.values()) > 4:
+            # remove smallest
+            smallest = sorted(cfg.items(), key=lambda x: _MIG_PROFILE_MEM_GB.get(x[0], 0))[0][0]
+            cfg[smallest] -= 1
+            if cfg[smallest] <= 0:
+                del cfg[smallest]
+
+        return jsonify({'config': cfg, 'need_gb': need_gb, 'rationale': 'Heuristic based on parameter count and batch/seq settings'})
+    except Exception as e:
+        return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
 
 
 @app.route('/api/gpu/partition/apply', methods=['POST'])
