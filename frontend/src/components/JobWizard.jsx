@@ -500,8 +500,8 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
           )}
 
           <div className="flex justify-between">
-            <button onClick={back} className="px-4 py-2 border rounded">Back</button>
-            <button onClick={next} className="px-4 py-2 bg-blue-600 text-white rounded">Next</button>
+            <button onClick={back} className="px-4 py-2 border border-border rounded bg-surface hover:bg-muted">Back</button>
+            <button onClick={next} className="px-4 py-2 bg-primary text-on-primary rounded hover:brightness-110">Next</button>
           </div>
         </div>
       )}
@@ -1131,8 +1131,8 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
           )}
 
           <div className="flex justify-between">
-            <button onClick={back} className="px-4 py-2 border rounded">Back</button>
-            <button onClick={next} className="px-4 py-2 bg-blue-600 text-white rounded">Next</button>
+            <button onClick={back} className="px-4 py-2 border border-border rounded bg-surface hover:bg-muted">Back</button>
+            <button onClick={next} className="px-4 py-2 bg-primary text-on-primary rounded hover:brightness-110">Next</button>
           </div>
         </div>
       )}
@@ -1176,10 +1176,10 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
           </div>
 
           {warnings.length>0 && (
-            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded text-sm">{warnings.join('\n')}</div>
+            <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-sm text-yellow-800 dark:text-yellow-200">{warnings.join('\n')}</div>
           )}
           {errors.length>0 && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{errors.join('\n')}</div>
+            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-300">{errors.join('\n')}</div>
           )}
 
           <div className="flex justify-between items-center">
