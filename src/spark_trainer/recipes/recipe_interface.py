@@ -31,6 +31,41 @@ class DataConfig:
 
 
 @dataclass
+class GatingConfig:
+    """
+    Gating mechanism configuration for dynamic capacity and smarter compute.
+
+    Supports various gating types:
+    - moe: Token-level MoE with Top-K routing and capacity factors
+    - moe_lora: MoE with per-expert LoRA adapters (lower VRAM)
+    - routerless: DeepSeek-style routerless MoE (simpler training)
+    - mixture_of_depths: Dynamic layer selection (early exit)
+    - film_gates: FiLM gating for multi-modal fusion
+    - span_routing: Route contiguous spans for efficiency
+    """
+    type: str = 'moe'  # moe | moe_lora | routerless | film_gates | span_routing | mixture_of_depths
+    num_experts: int = 8
+    num_selected: int = 2  # K in Top-K routing
+    capacity_factor: float = 1.25
+    gate_temp: float = 1.0
+    z_loss_coef: float = 0.01  # Auxiliary loss coefficient
+    # LoRA-specific parameters
+    lora_rank: int = 8
+    lora_alpha: float = 16.0
+    # Mixture-of-Depths parameters
+    depth_threshold: float = 0.8
+    min_layers: int = 1
+    # Span routing parameters
+    span_size: int = 32
+    span_overlap: int = 8
+    # Multi-modal parameters
+    num_modalities: int = 3  # text=0, image=1, audio=2
+    # General parameters
+    dropout: float = 0.1
+    enable_metrics: bool = True  # Track expert utilization, overflow, etc.
+
+
+@dataclass
 class ModelConfig:
     """Model configuration."""
     architecture: str
@@ -40,6 +75,7 @@ class ModelConfig:
     num_layers: Optional[int] = None
     dropout: float = 0.1
     custom_params: Optional[Dict] = None
+    gating: Optional[GatingConfig] = None  # Gating mechanism config
 
 
 @dataclass
@@ -240,6 +276,10 @@ class TrainerRecipe(ABC):
 
         logger.info(f"Config saved to {path}")
 
+        # Also log gating config if present
+        if self.model_config and self.model_config.gating:
+            logger.info(f"Gating: {self.model_config.gating.type} with {self.model_config.gating.num_experts} experts")
+
     @classmethod
     def from_config(cls, config_path: str, output_dir: str):
         """Load recipe from configuration file."""
@@ -252,7 +292,11 @@ class TrainerRecipe(ABC):
             recipe.data_config = DataConfig(**config['data_config'])
 
         if config.get('model_config'):
-            recipe.model_config = ModelConfig(**config['model_config'])
+            model_config_dict = config['model_config']
+            # Handle nested GatingConfig
+            if 'gating' in model_config_dict and model_config_dict['gating'] is not None:
+                model_config_dict['gating'] = GatingConfig(**model_config_dict['gating'])
+            recipe.model_config = ModelConfig(**model_config_dict)
 
         if config.get('training_config'):
             recipe.training_config = TrainingConfig(**config['training_config'])
