@@ -14,7 +14,7 @@ celery = Celery(
     "sparktrainer",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=["celery_tasks"]  # Import tasks module
+    include=["celery_tasks", "transfer_tasks"]  # Import tasks modules
 )
 
 # Celery configuration
@@ -50,6 +50,12 @@ celery.conf.update(
         "celery_tasks.train_model": {"queue": "training"},
         "celery_tasks.preprocess_data": {"queue": "preprocessing"},
         "celery_tasks.evaluate_model": {"queue": "evaluation"},
+        "transfer_tasks.download_hf_model": {"queue": "transfers"},
+        "transfer_tasks.download_hf_dataset": {"queue": "transfers"},
+        "transfer_tasks.upload_hf_model": {"queue": "transfers"},
+        "transfer_tasks.pause_transfer": {"queue": "transfers"},
+        "transfer_tasks.resume_transfer": {"queue": "transfers"},
+        "transfer_tasks.cancel_transfer": {"queue": "transfers"},
     },
 
     # Define queues
@@ -58,6 +64,7 @@ celery.conf.update(
         Queue("training", Exchange("training"), routing_key="training", priority=10),
         Queue("preprocessing", Exchange("preprocessing"), routing_key="preprocessing", priority=5),
         Queue("evaluation", Exchange("evaluation"), routing_key="evaluation", priority=3),
+        Queue("transfers", Exchange("transfers"), routing_key="transfers", priority=7),
     ),
 
     # Monitoring
