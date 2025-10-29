@@ -1,0 +1,94 @@
+{
+  "title": "SparkTrainer Documentation",
+  "sections": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "file": "overview.md",
+      "icon": "book-open"
+    },
+    {
+      "id": "getting-started",
+      "title": "Getting Started",
+      "file": "getting-started.md",
+      "icon": "rocket"
+    },
+    {
+      "id": "pages",
+      "title": "Pages",
+      "icon": "layout",
+      "subsections": [
+        {
+          "id": "dashboard",
+          "title": "Dashboard",
+          "file": "pages/dashboard.md"
+        },
+        {
+          "id": "models",
+          "title": "Models",
+          "file": "pages/models.md"
+        },
+        {
+          "id": "datasets",
+          "title": "Datasets",
+          "file": "pages/datasets.md"
+        },
+        {
+          "id": "experiments",
+          "title": "Experiments",
+          "file": "pages/experiments.md"
+        },
+        {
+          "id": "pipelines",
+          "title": "Pipelines",
+          "file": "pages/pipelines.md"
+        }
+      ]
+    },
+    {
+      "id": "recipes",
+      "title": "Training Recipes",
+      "icon": "chef-hat",
+      "subsections": [
+        {
+          "id": "lora",
+          "title": "LoRA Fine-tuning",
+          "file": "recipes/lora.md"
+        },
+        {
+          "id": "full-finetune",
+          "title": "Full Fine-tuning",
+          "file": "recipes/full-finetune.md"
+        },
+        {
+          "id": "distillation",
+          "title": "Model Distillation",
+          "file": "recipes/distillation.md"
+        }
+      ]
+    },
+    {
+      "id": "admin",
+      "title": "Administration",
+      "icon": "settings",
+      "subsections": [
+        {
+          "id": "gpu-management",
+          "title": "GPU Management",
+          "file": "admin/gpu-management.md"
+        },
+        {
+          "id": "user-management",
+          "title": "User Management",
+          "file": "admin/user-management.md"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "title": "API Reference",
+      "file": "api-reference.md",
+      "icon": "code"
+    }
+  ]
+}
