@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import GatingMetricsViewer from './GatingMetricsViewer';
 
 export default function ExperimentsPage(){
   const [items, setItems] = useState([]);
@@ -12,6 +13,8 @@ export default function ExperimentsPage(){
   const [comparing, setComparing] = useState([]);
   const [compareData, setCompareData] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
+  const [gatingEnabled, setGatingEnabled] = useState(false);
+  const [selectedJobForGating, setSelectedJobForGating] = useState(null);
 
   const load = async () => {
     try{
@@ -47,7 +50,30 @@ export default function ExperimentsPage(){
       setDetail(j);
       setEdit({ name: j.name||'', description: j.description||'', tags:(j.tags||[]).join(',') });
       loadMetrics(id);
+      checkGatingEnabled(id);
     }catch{}
+  };
+
+  const checkGatingEnabled = async (expId) => {
+    try{
+      const res = await fetch(`/api/experiments/${encodeURIComponent(expId)}/gating/summary`);
+      const j = await res.json();
+      setGatingEnabled(j.enabled || false);
+
+      // If gating is enabled, find the first job with gating for display
+      if (j.enabled) {
+        const jobsRes = await fetch(`/api/experiments/${encodeURIComponent(expId)}/jobs`);
+        const jobsData = await jobsRes.json();
+        const jobWithGating = jobsData.jobs?.find(job => {
+          return job.config?.gating?.enabled || job.metadata?.gating_metrics;
+        });
+        if (jobWithGating) {
+          setSelectedJobForGating(jobWithGating.id);
+        }
+      }
+    }catch{
+      setGatingEnabled(false);
+    }
   };
 
   const loadMetrics = async (id) => {
@@ -259,7 +285,7 @@ export default function ExperimentsPage(){
 
             {/* Tabs */}
             <div className="flex gap-1 px-4 pt-2 border-b border-border">
-              {['overview', 'metrics', 'runs'].map(tab => (
+              {['overview', 'metrics', 'runs', ...(gatingEnabled ? ['gating'] : [])].map(tab => (
                 <button
                   key={tab}
                   className={`px-4 py-2 rounded-t transition-colors ${
@@ -269,7 +295,7 @@ export default function ExperimentsPage(){
                   }`}
                   onClick={() => setActiveTab(tab)}
                 >
-                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  {tab === 'gating' ? '🚀 Gating' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                 </button>
               ))}
             </div>
@@ -457,6 +483,20 @@ export default function ExperimentsPage(){
                       </tbody>
                     </table>
                   </div>
+                </div>
+              )}
+
+              {activeTab === 'gating' && (
+                <div>
+                  {selectedJobForGating ? (
+                    <GatingMetricsViewer jobId={selectedJobForGating} api="" />
+                  ) : (
+                    <div className="text-center py-12 text-text/60">
+                      <div className="text-2xl mb-2">🚀</div>
+                      <div>No job with gating found in this experiment</div>
+                      <div className="text-xs mt-1">Create a job with gating enabled to see metrics here</div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

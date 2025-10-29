@@ -1305,6 +1305,244 @@ def job_metrics_stream(job_id):
     return Response(gen(), headers=headers)
 
 
+@app.route('/api/jobs/<job_id>/gating/metrics', methods=['GET'])
+def job_gating_metrics(job_id):
+    """
+    Get gating-specific metrics for a job (expert utilization, capacity overflow, etc.).
+
+    Returns metrics for MoE, MoE-LoRA, Routerless MoE, Mixture-of-Depths, FiLM, and Span Routing.
+    """
+    jobs = _load_jobs()
+    job = next((j for j in jobs if j.get('id') == job_id), None)
+
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    # Extract gating metrics from job metadata
+    metadata = job.get('metadata', {})
+    gating_metrics = metadata.get('gating_metrics', {})
+
+    # If no gating metrics yet, check if gating is enabled in config
+    if not gating_metrics:
+        config = job.get('config', {})
+        gating_config = config.get('gating', {})
+
+        if gating_config.get('enabled'):
+            # Return empty structure indicating gating is enabled but no metrics yet
+            return jsonify({
+                'enabled': True,
+                'type': gating_config.get('type', 'moe'),
+                'metrics': None,
+                'message': 'Gating is enabled but training has not started yet'
+            })
+        else:
+            return jsonify({
+                'enabled': False,
+                'message': 'Gating is not enabled for this job'
+            })
+
+    return jsonify({
+        'enabled': True,
+        'type': gating_metrics.get('type'),
+        'metrics': gating_metrics,
+        'last_updated': gating_metrics.get('last_updated'),
+    })
+
+
+@app.route('/api/jobs/<job_id>/gating/metrics', methods=['POST'])
+def update_job_gating_metrics(job_id):
+    """
+    Update gating metrics for a job (called by training script).
+
+    Expected payload:
+    {
+        "type": "moe|moe_lora|routerless|mixture_of_depths|film_gates|span_routing",
+        "expert_utilization": [count1, count2, ...],
+        "capacity_overflow": 5.2,
+        "z_loss": 0.015,
+        "gate_entropy": 2.8,
+        "expert_load_variance": 0.03,
+        "routing_confidence": 0.85,
+        "step": 1000,
+        "epoch": 2
+    }
+    """
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    jobs = _load_jobs()
+    job_idx = next((i for i, j in enumerate(jobs) if j.get('id') == job_id), None)
+
+    if job_idx is None:
+        return jsonify({'error': 'Job not found'}), 404
+
+    job = jobs[job_idx]
+    metadata = job.get('metadata', {})
+
+    # Initialize gating metrics if not present
+    if 'gating_metrics' not in metadata:
+        metadata['gating_metrics'] = {
+            'type': data.get('type'),
+            'history': [],
+            'summary': {},
+        }
+
+    # Add current metrics to history
+    current_metrics = {
+        'step': data.get('step'),
+        'epoch': data.get('epoch'),
+        'timestamp': datetime.utcnow().isoformat(),
+    }
+
+    # Add all metrics from payload
+    for key in ['expert_utilization', 'capacity_overflow', 'z_loss', 'gate_entropy',
+                'expert_load_variance', 'routing_confidence', 'avg_depth', 'exit_rate',
+                'modality_distribution', 'num_spans']:
+        if key in data:
+            current_metrics[key] = data[key]
+
+    metadata['gating_metrics']['history'].append(current_metrics)
+    metadata['gating_metrics']['last_updated'] = datetime.utcnow().isoformat()
+
+    # Update summary with latest metrics
+    metadata['gating_metrics']['summary'] = current_metrics
+
+    # Keep only last 1000 metrics to avoid bloat
+    if len(metadata['gating_metrics']['history']) > 1000:
+        metadata['gating_metrics']['history'] = metadata['gating_metrics']['history'][-1000:]
+
+    job['metadata'] = metadata
+    jobs[job_idx] = job
+    _save_jobs(jobs)
+
+    return jsonify({'success': True, 'message': 'Gating metrics updated'})
+
+
+@app.route('/api/jobs/<job_id>/gating/expert-utilization', methods=['GET'])
+def job_expert_utilization_heatmap(job_id):
+    """
+    Get expert utilization data formatted for heatmap visualization.
+
+    Returns time-series data of expert utilization across training steps.
+    """
+    jobs = _load_jobs()
+    job = next((j for j in jobs if j.get('id') == job_id), None)
+
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    metadata = job.get('metadata', {})
+    gating_metrics = metadata.get('gating_metrics', {})
+
+    if not gating_metrics or 'history' not in gating_metrics:
+        return jsonify({
+            'error': 'No gating metrics available',
+            'enabled': False
+        }), 404
+
+    history = gating_metrics['history']
+
+    # Extract expert utilization over time
+    steps = []
+    expert_util_over_time = []
+
+    for entry in history:
+        if 'expert_utilization' in entry and entry['expert_utilization']:
+            steps.append(entry.get('step', 0))
+            expert_util_over_time.append(entry['expert_utilization'])
+
+    if not expert_util_over_time:
+        return jsonify({
+            'error': 'No expert utilization data available'
+        }), 404
+
+    # Compute statistics
+    import numpy as np
+    expert_util_array = np.array(expert_util_over_time)
+    num_experts = expert_util_array.shape[1] if len(expert_util_array.shape) > 1 else 0
+
+    # Calculate per-expert statistics
+    expert_stats = []
+    if num_experts > 0:
+        for expert_id in range(num_experts):
+            expert_data = expert_util_array[:, expert_id]
+            expert_stats.append({
+                'expert_id': expert_id,
+                'mean_utilization': float(np.mean(expert_data)),
+                'std_utilization': float(np.std(expert_data)),
+                'min_utilization': float(np.min(expert_data)),
+                'max_utilization': float(np.max(expert_data)),
+            })
+
+    return jsonify({
+        'enabled': True,
+        'type': gating_metrics.get('type'),
+        'steps': steps,
+        'expert_utilization': expert_util_over_time,
+        'num_experts': num_experts,
+        'expert_stats': expert_stats,
+        'summary': {
+            'total_steps': len(steps),
+            'load_balance_score': float(1.0 - np.mean([s['std_utilization'] for s in expert_stats])) if expert_stats else 0.0,
+        }
+    })
+
+
+@app.route('/api/experiments/<exp_id>/gating/summary', methods=['GET'])
+def experiment_gating_summary(exp_id):
+    """
+    Get aggregated gating metrics summary for all jobs in an experiment.
+    """
+    exps = _load_experiments()
+    exp = next((e for e in exps if e.get('id') == exp_id), None)
+
+    if not exp:
+        return jsonify({'error': 'Experiment not found'}), 404
+
+    jobs = _load_jobs()
+    exp_jobs = [j for j in jobs if j.get('experiment_id') == exp_id]
+
+    gating_enabled = False
+    gating_type = None
+    aggregated_metrics = {
+        'jobs_with_gating': 0,
+        'total_jobs': len(exp_jobs),
+        'avg_capacity_overflow': 0.0,
+        'avg_z_loss': 0.0,
+        'avg_gate_entropy': 0.0,
+        'avg_expert_load_variance': 0.0,
+    }
+
+    metrics_collected = []
+
+    for job in exp_jobs:
+        metadata = job.get('metadata', {})
+        gating_metrics = metadata.get('gating_metrics', {})
+
+        if gating_metrics and 'summary' in gating_metrics:
+            gating_enabled = True
+            gating_type = gating_metrics.get('type')
+            aggregated_metrics['jobs_with_gating'] += 1
+
+            summary = gating_metrics['summary']
+            metrics_collected.append(summary)
+
+    # Calculate averages
+    if metrics_collected:
+        for key in ['capacity_overflow', 'z_loss', 'gate_entropy', 'expert_load_variance']:
+            values = [m.get(key, 0) for m in metrics_collected if m.get(key) is not None]
+            if values:
+                aggregated_metrics[f'avg_{key}'] = sum(values) / len(values)
+
+    return jsonify({
+        'enabled': gating_enabled,
+        'type': gating_type,
+        'metrics': aggregated_metrics,
+    })
+
+
 [...]
 @app.route('/api/jobs/<job_id>/logs', methods=['GET'])
 def job_logs(job_id):

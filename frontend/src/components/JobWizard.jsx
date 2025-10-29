@@ -116,6 +116,26 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
   // Architecture custom params (simple)
   const [customArch, setCustomArch] = useState({ input_size: 784, output_size: 10, hidden_layers: '512,256,128' });
 
+  // Gating mechanisms for dynamic capacity and smarter compute
+  const [gating, setGating] = useState({
+    enabled: false,
+    type: 'moe', // moe | moe_lora | routerless | film_gates | span_routing | mixture_of_depths
+    num_experts: 8,
+    num_selected: 2,
+    capacity_factor: 1.25,
+    gate_temp: 1.0,
+    z_loss_coef: 0.01,
+    lora_rank: 8,
+    lora_alpha: 16.0,
+    depth_threshold: 0.8,
+    min_layers: 1,
+    span_size: 32,
+    span_overlap: 8,
+    num_modalities: 3,
+    dropout: 0.1,
+    enable_metrics: true,
+  });
+
   useEffect(() => {
     if (gpuMode !== 'select') return;
     if (gpuSelection) return;
@@ -307,6 +327,26 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
       cfg.input_size = customArch.input_size;
       cfg.output_size = customArch.output_size;
       cfg.hidden_layers = customArch.hidden_layers.split(',').map(s=>parseInt(s.trim())).filter(Boolean);
+    }
+    // Add gating configuration if enabled
+    if (gating.enabled) {
+      cfg.gating = {
+        type: gating.type,
+        num_experts: parseInt(gating.num_experts) || 8,
+        num_selected: parseInt(gating.num_selected) || 2,
+        capacity_factor: parseFloat(gating.capacity_factor) || 1.25,
+        gate_temp: parseFloat(gating.gate_temp) || 1.0,
+        z_loss_coef: parseFloat(gating.z_loss_coef) || 0.01,
+        lora_rank: parseInt(gating.lora_rank) || 8,
+        lora_alpha: parseFloat(gating.lora_alpha) || 16.0,
+        depth_threshold: parseFloat(gating.depth_threshold) || 0.8,
+        min_layers: parseInt(gating.min_layers) || 1,
+        span_size: parseInt(gating.span_size) || 32,
+        span_overlap: parseInt(gating.span_overlap) || 8,
+        num_modalities: parseInt(gating.num_modalities) || 3,
+        dropout: parseFloat(gating.dropout) || 0.1,
+        enable_metrics: gating.enable_metrics,
+      };
     }
     return cfg;
   };
@@ -790,6 +830,190 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
               </div>
             </details>
           )}
+
+        {/* Gating Mechanisms for Dynamic Capacity */}
+        <details className="mt-2">
+          <summary className="cursor-pointer text-sm font-semibold">🚀 Gating Mechanisms (MoE, Mixture-of-Depths, Multi-modal)</summary>
+          <div className="mt-2 space-y-4">
+            <div className="flex items-center gap-2 mb-3">
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={gating.enabled} onChange={e=>setGating({...gating, enabled:e.target.checked})}/>
+                <span className="font-semibold">Enable Gating for Dynamic Compute & Smarter Routing</span>
+              </label>
+            </div>
+
+            {gating.enabled && (
+              <div className="space-y-4 border border-primary/20 rounded-lg p-4 bg-primary/5">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-sm font-semibold">Gating Type</label>
+                    <select className="w-full border rounded px-3 py-2 mt-1" value={gating.type} onChange={e=>setGating({...gating, type: e.target.value})}>
+                      <option value="moe">Token-level MoE (Top-K routing)</option>
+                      <option value="moe_lora">MoE-LoRA (Low VRAM footprint)</option>
+                      <option value="routerless">Routerless MoE (DeepSeek-style)</option>
+                      <option value="mixture_of_depths">Mixture-of-Depths (Early exit)</option>
+                      <option value="film_gates">FiLM Gating (Multi-modal fusion)</option>
+                      <option value="span_routing">Span Routing (Efficiency)</option>
+                    </select>
+                    <p className="text-xs text-text/60 mt-1">
+                      {gating.type === 'moe' && 'Switch/Top-K experts with capacity factor & z-loss'}
+                      {gating.type === 'moe_lora' && 'Per-expert LoRA adapters - dramatically smaller VRAM'}
+                      {gating.type === 'routerless' && 'No explicit routing - simpler training, no collapse'}
+                      {gating.type === 'mixture_of_depths' && 'Dynamic layer selection - easy tokens exit early'}
+                      {gating.type === 'film_gates' && 'Modality-conditioned gates for text↔image↔audio'}
+                      {gating.type === 'span_routing' && 'Route contiguous spans to share KV/memory'}
+                    </p>
+                  </div>
+
+                  {(gating.type === 'moe' || gating.type === 'moe_lora' || gating.type === 'routerless' || gating.type === 'span_routing') && (
+                    <div>
+                      <label className="text-sm">Number of Experts</label>
+                      <input type="number" min="2" max="256" className="w-full border rounded px-3 py-2 mt-1" value={gating.num_experts} onChange={e=>setGating({...gating, num_experts: parseInt(e.target.value)||8})}/>
+                      <p className="text-xs text-text/60 mt-1">Total expert modules (typically 4-16)</p>
+                    </div>
+                  )}
+
+                  {(gating.type === 'moe' || gating.type === 'moe_lora') && (
+                    <div>
+                      <label className="text-sm">Top-K Selected</label>
+                      <input type="number" min="1" max="8" className="w-full border rounded px-3 py-2 mt-1" value={gating.num_selected} onChange={e=>setGating({...gating, num_selected: parseInt(e.target.value)||2})}/>
+                      <p className="text-xs text-text/60 mt-1">Number of experts per token (usually 1-2)</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* MoE-specific parameters */}
+                {(gating.type === 'moe' || gating.type === 'moe_lora') && (
+                  <div className="border-t border-border pt-3">
+                    <div className="text-sm font-semibold mb-2">MoE Load Balancing</div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs">Capacity Factor: {gating.capacity_factor}x</label>
+                        <input type="range" min="1.0" max="2.0" step="0.05" value={gating.capacity_factor} onChange={e=>setGating({...gating, capacity_factor: parseFloat(e.target.value)})} className="w-full"/>
+                        <p className="text-xs text-text/60">Expert capacity multiplier (higher = less overflow)</p>
+                      </div>
+                      <div>
+                        <label className="text-xs">Gate Temperature: {gating.gate_temp}</label>
+                        <input type="range" min="0.1" max="2.0" step="0.1" value={gating.gate_temp} onChange={e=>setGating({...gating, gate_temp: parseFloat(e.target.value)})} className="w-full"/>
+                        <p className="text-xs text-text/60">Routing sharpness (lower = more peaked)</p>
+                      </div>
+                      <div>
+                        <label className="text-xs">Z-loss Coefficient</label>
+                        <input type="number" step="0.001" className="w-full border rounded px-2 py-1" value={gating.z_loss_coef} onChange={e=>setGating({...gating, z_loss_coef: parseFloat(e.target.value)||0.01})}/>
+                        <p className="text-xs text-text/60">Auxiliary loss for stability (0.001-0.1)</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* MoE-LoRA specific */}
+                {gating.type === 'moe_lora' && (
+                  <div className="border-t border-border pt-3">
+                    <div className="text-sm font-semibold mb-2">LoRA Configuration</div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs">LoRA Rank: {gating.lora_rank}</label>
+                        <input type="range" min="1" max="128" value={gating.lora_rank} onChange={e=>setGating({...gating, lora_rank: parseInt(e.target.value)})} className="w-full"/>
+                      </div>
+                      <div>
+                        <label className="text-xs">LoRA Alpha</label>
+                        <input type="number" className="w-full border rounded px-2 py-1" value={gating.lora_alpha} onChange={e=>setGating({...gating, lora_alpha: parseFloat(e.target.value)||16.0})}/>
+                      </div>
+                      <div>
+                        <label className="text-xs">Dropout</label>
+                        <input type="number" step="0.01" min="0" max="0.5" className="w-full border rounded px-2 py-1" value={gating.dropout} onChange={e=>setGating({...gating, dropout: parseFloat(e.target.value)||0.1})}/>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mixture-of-Depths specific */}
+                {gating.type === 'mixture_of_depths' && (
+                  <div className="border-t border-border pt-3">
+                    <div className="text-sm font-semibold mb-2">Depth Gating Configuration</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs">Confidence Threshold: {gating.depth_threshold}</label>
+                        <input type="range" min="0.1" max="0.99" step="0.05" value={gating.depth_threshold} onChange={e=>setGating({...gating, depth_threshold: parseFloat(e.target.value)})} className="w-full"/>
+                        <p className="text-xs text-text/60">Higher = more tokens exit early</p>
+                      </div>
+                      <div>
+                        <label className="text-xs">Minimum Layers</label>
+                        <input type="number" min="1" max="12" className="w-full border rounded px-2 py-1" value={gating.min_layers} onChange={e=>setGating({...gating, min_layers: parseInt(e.target.value)||1})}/>
+                        <p className="text-xs text-text/60">All tokens process through these layers</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* FiLM gating specific */}
+                {gating.type === 'film_gates' && (
+                  <div className="border-t border-border pt-3">
+                    <div className="text-sm font-semibold mb-2">Multi-modal Configuration</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs">Number of Modalities</label>
+                        <select className="w-full border rounded px-2 py-1" value={gating.num_modalities} onChange={e=>setGating({...gating, num_modalities: parseInt(e.target.value)||3})}>
+                          <option value="2">2 (e.g., text + image)</option>
+                          <option value="3">3 (text + image + audio)</option>
+                          <option value="4">4 (text + image + audio + video)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs">Dropout</label>
+                        <input type="number" step="0.01" min="0" max="0.5" className="w-full border rounded px-2 py-1" value={gating.dropout} onChange={e=>setGating({...gating, dropout: parseFloat(e.target.value)||0.1})}/>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Span routing specific */}
+                {gating.type === 'span_routing' && (
+                  <div className="border-t border-border pt-3">
+                    <div className="text-sm font-semibold mb-2">Span Configuration</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs">Span Size (tokens)</label>
+                        <input type="number" min="8" max="512" step="8" className="w-full border rounded px-2 py-1" value={gating.span_size} onChange={e=>setGating({...gating, span_size: parseInt(e.target.value)||32})}/>
+                        <p className="text-xs text-text/60">Contiguous tokens routed together</p>
+                      </div>
+                      <div>
+                        <label className="text-xs">Overlap (tokens)</label>
+                        <input type="number" min="0" max="64" step="4" className="w-full border rounded px-2 py-1" value={gating.span_overlap} onChange={e=>setGating({...gating, span_overlap: parseInt(e.target.value)||8})}/>
+                        <p className="text-xs text-text/60">Overlap between consecutive spans</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Metrics monitoring */}
+                <div className="border-t border-border pt-3">
+                  <label className="inline-flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={gating.enable_metrics} onChange={e=>setGating({...gating, enable_metrics:e.target.checked})}/>
+                    <span>Track expert utilization, capacity overflow, and routing statistics</span>
+                  </label>
+                  <p className="text-xs text-text/60 ml-6 mt-1">
+                    View heatmaps and metrics in Jobs dashboard after training starts
+                  </p>
+                </div>
+
+                {/* Info box */}
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-3 text-xs">
+                  <div className="font-semibold mb-1">💡 Gating Benefits:</div>
+                  <ul className="list-disc list-inside space-y-1 text-text/80">
+                    <li><strong>MoE:</strong> Scales model capacity while keeping inference cost constant</li>
+                    <li><strong>MoE-LoRA:</strong> 10-100x less VRAM than full MoE - perfect for consumer GPUs</li>
+                    <li><strong>Routerless:</strong> Easier training, no routing collapse issues</li>
+                    <li><strong>Mixture-of-Depths:</strong> 2-3x faster inference by skipping layers for easy tokens</li>
+                    <li><strong>FiLM:</strong> Adaptive multi-modal fusion (text↔vision↔audio)</li>
+                    <li><strong>Span Routing:</strong> Reduced routing overhead for long contexts</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
+
         {/* Precision & Distributed */}
         {framework==='huggingface' && (
           <details className="mt-2">
