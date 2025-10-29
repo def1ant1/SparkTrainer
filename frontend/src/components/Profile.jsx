@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import TransferQueue from './TransferQueue';
 
 // Toast hook for notifications
 const useToast = () => {
@@ -39,6 +40,7 @@ export default function ProfilePage() {
   const [hfSearchModel, setHfSearchModel] = useState('');
   const [hfSearchDataset, setHfSearchDataset] = useState('');
   const [downloading, setDownloading] = useState({});
+  const [showTransferQueue, setShowTransferQueue] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -196,7 +198,13 @@ export default function ProfilePage() {
       });
       const data = await res.json();
       if (data.status === 'ok') {
-        toast.push({ type: 'success', title: 'Model download started', message: modelId });
+        toast.push({
+          type: 'success',
+          title: 'Model queued for download',
+          message: 'Check Transfer Queue for progress'
+        });
+        // Auto-open transfer queue after 1 second
+        setTimeout(() => setShowTransferQueue(true), 1000);
       } else {
         toast.push({ type: 'error', title: 'Download failed', message: data.error || 'Unknown error' });
       }
@@ -220,7 +228,13 @@ export default function ProfilePage() {
       });
       const data = await res.json();
       if (data.status === 'ok') {
-        toast.push({ type: 'success', title: 'Dataset download started', message: datasetId });
+        toast.push({
+          type: 'success',
+          title: 'Dataset queued for download',
+          message: 'Check Transfer Queue for progress'
+        });
+        // Auto-open transfer queue after 1 second
+        setTimeout(() => setShowTransferQueue(true), 1000);
       } else {
         toast.push({ type: 'error', title: 'Download failed', message: data.error || 'Unknown error' });
       }
@@ -670,6 +684,19 @@ export default function ProfilePage() {
       {/* HuggingFace Integration Tab */}
       {activeTab === 'huggingface' && (
         <div className="space-y-6">
+          {/* Transfer Queue Button */}
+          <div className="flex justify-end">
+            <button
+              onClick={() => setShowTransferQueue(true)}
+              className="px-4 py-2 bg-primary text-on-primary rounded-lg hover:brightness-110 flex items-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              View Transfer Queue
+            </button>
+          </div>
+
           {/* Model Search */}
           <div className="bg-surface border border-border rounded-lg p-6">
             <h2 className="text-xl font-semibold mb-4">Download HuggingFace Models</h2>
@@ -836,5 +863,10 @@ export default function ProfilePage() {
         </div>
       )}
     </div>
+
+    {/* Transfer Queue Modal */}
+    {showTransferQueue && (
+      <TransferQueue onClose={() => setShowTransferQueue(false)} />
+    )}
   );
 }

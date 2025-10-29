@@ -29,6 +29,25 @@ class JobStatus(str, PyEnum):
     CANCELLED = "cancelled"
 
 
+class TransferStatus(str, PyEnum):
+    """Transfer status enumeration."""
+    QUEUED = "queued"
+    DOWNLOADING = "downloading"
+    UPLOADING = "uploading"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TransferType(str, PyEnum):
+    """Transfer type enumeration."""
+    MODEL_DOWNLOAD = "model_download"
+    DATASET_DOWNLOAD = "dataset_download"
+    MODEL_UPLOAD = "model_upload"
+    DATASET_UPLOAD = "dataset_upload"
+
+
 # Valid state transitions
 VALID_TRANSITIONS = {
     JobStatus.PENDING: [JobStatus.QUEUED, JobStatus.CANCELLED],
@@ -38,6 +57,17 @@ VALID_TRANSITIONS = {
     JobStatus.COMPLETED: [],  # Terminal state
     JobStatus.FAILED: [],     # Terminal state
     JobStatus.CANCELLED: [],  # Terminal state
+}
+
+# Valid transfer state transitions
+VALID_TRANSFER_TRANSITIONS = {
+    TransferStatus.QUEUED: [TransferStatus.DOWNLOADING, TransferStatus.UPLOADING, TransferStatus.CANCELLED],
+    TransferStatus.DOWNLOADING: [TransferStatus.PAUSED, TransferStatus.COMPLETED, TransferStatus.FAILED, TransferStatus.CANCELLED],
+    TransferStatus.UPLOADING: [TransferStatus.PAUSED, TransferStatus.COMPLETED, TransferStatus.FAILED, TransferStatus.CANCELLED],
+    TransferStatus.PAUSED: [TransferStatus.DOWNLOADING, TransferStatus.UPLOADING, TransferStatus.CANCELLED],
+    TransferStatus.COMPLETED: [],  # Terminal state
+    TransferStatus.FAILED: [TransferStatus.QUEUED],  # Allow retry
+    TransferStatus.CANCELLED: [],  # Terminal state
 }
 
 
@@ -371,6 +401,125 @@ class Evaluation(Base):
     )
 
 
+class Transfer(Base):
+    """HuggingFace transfer queue with bandwidth management and resumable transfers."""
+    __tablename__ = "transfers"
+
+    id = Column(String(36), primary_key=True)
+
+    # Celery task tracking
+    celery_task_id = Column(String(64), nullable=True, unique=True)
+
+    # Transfer properties
+    name = Column(String(500), nullable=False)  # Model/dataset name
+    transfer_type = Column(Enum(TransferType), nullable=False)
+    direction = Column(String(20), nullable=False)  # 'download' or 'upload'
+
+    # Source and destination
+    source_url = Column(String(1000), nullable=True)  # HF repo ID or URL
+    destination_path = Column(String(1000), nullable=False)
+
+    # Size and progress
+    size_bytes = Column(Integer, default=0)  # Total size
+    bytes_transferred = Column(Integer, default=0)  # Bytes transferred so far
+    progress = Column(Float, default=0.0)  # Percentage (0.0-100.0)
+
+    # Bandwidth metrics
+    current_rate = Column(Float, default=0.0)  # Current transfer rate (bytes/sec)
+    average_rate = Column(Float, default=0.0)  # Average transfer rate (bytes/sec)
+    bandwidth_limit = Column(Integer, nullable=True)  # Max bytes/sec (null = unlimited)
+
+    # Status tracking
+    status = Column(Enum(TransferStatus), default=TransferStatus.QUEUED)
+    priority = Column(Integer, default=0)  # Higher = more important
+
+    # Resume support
+    resume_token = Column(String(500), nullable=True)  # For resumable uploads
+    last_byte_position = Column(Integer, default=0)  # For HTTP Range requests
+    chunk_checksums = Column(JSON, default=[])  # Verify partial transfers
+
+    # Retry logic
+    retries = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
+
+    # Error handling
+    error_message = Column(Text, nullable=True)
+    error_details = Column(JSON, default={})
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now())
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    paused_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # Estimated completion
+    eta_seconds = Column(Integer, nullable=True)  # Estimated time remaining
+
+    # Metadata
+    metadata = Column(JSON, default={})  # Store HF token, config options, etc.
+
+    __table_args__ = (
+        Index("idx_transfer_status", "status"),
+        Index("idx_transfer_priority", "priority"),
+        Index("idx_transfer_type", "transfer_type"),
+        Index("idx_transfer_created", "created_at"),
+        Index("idx_transfer_celery_task", "celery_task_id"),
+    )
+
+    def can_transition_to(self, new_status: TransferStatus) -> bool:
+        """Check if transition to new status is valid."""
+        current = TransferStatus(self.status)
+        target = TransferStatus(new_status)
+        return target in VALID_TRANSFER_TRANSITIONS.get(current, [])
+
+    def transition_to(self, new_status: TransferStatus, reason: Optional[str] = None):
+        """Transition transfer to new status with validation."""
+        if not self.can_transition_to(new_status):
+            raise ValueError(
+                f"Invalid status transition from {self.status} to {new_status}. "
+                f"Valid transitions: {VALID_TRANSFER_TRANSITIONS.get(TransferStatus(self.status), [])}"
+            )
+
+        old_status = self.status
+        self.status = new_status
+
+        # Update timestamps
+        now = datetime.utcnow()
+        if new_status in [TransferStatus.DOWNLOADING, TransferStatus.UPLOADING]:
+            if not self.started_at:
+                self.started_at = now
+        elif new_status == TransferStatus.PAUSED:
+            self.paused_at = now
+        elif new_status in [TransferStatus.COMPLETED, TransferStatus.FAILED, TransferStatus.CANCELLED]:
+            self.completed_at = now
+
+        return old_status
+
+    def update_progress(self, bytes_transferred: int, current_rate: float = None):
+        """Update transfer progress and calculate ETA."""
+        self.bytes_transferred = bytes_transferred
+
+        if self.size_bytes > 0:
+            self.progress = (bytes_transferred / self.size_bytes) * 100.0
+
+        if current_rate is not None:
+            self.current_rate = current_rate
+
+            # Calculate average rate
+            if self.started_at:
+                elapsed = (datetime.utcnow() - self.started_at).total_seconds()
+                if elapsed > 0:
+                    self.average_rate = bytes_transferred / elapsed
+
+            # Calculate ETA
+            remaining_bytes = self.size_bytes - bytes_transferred
+            if self.average_rate > 0 and remaining_bytes > 0:
+                self.eta_seconds = int(remaining_bytes / self.average_rate)
+            else:
+                self.eta_seconds = None
+
+
 class LeaderboardEntry(Base):
     """Leaderboard rankings for experiments."""
     __tablename__ = "leaderboard"
@@ -407,6 +556,7 @@ class LeaderboardEntry(Base):
 @event.listens_for(Experiment, 'before_update')
 @event.listens_for(Job, 'before_update')
 @event.listens_for(Artifact, 'before_update')
+@event.listens_for(Transfer, 'before_update')
 def receive_before_update(mapper, connection, target):
     """Update updated_at timestamp before update."""
     target.updated_at = datetime.utcnow()

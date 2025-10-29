@@ -5176,100 +5176,308 @@ def model_templates():
 
 @app.route('/api/huggingface/download-model', methods=['POST'])
 def huggingface_download_model():
-    """Download a model from HuggingFace Hub"""
+    """Download a model from HuggingFace Hub using transfer queue"""
     data = request.json or {}
     model_id = data.get('model_id')
     token = data.get('token')
+    bandwidth_limit = data.get('bandwidth_limit')  # bytes per second
 
     if not model_id:
         return jsonify({'error': 'model_id required'}), 400
 
     try:
-        # Create a background job to download the model
-        job_id = str(uuid.uuid4())
+        from models import Transfer, TransferType, TransferStatus
+        from transfer_tasks import download_hf_model
 
-        def download_model_task():
-            try:
-                from transformers import AutoModel, AutoTokenizer
-                import os
+        with get_db() as db:
+            # Create transfer record
+            transfer_id = str(uuid.uuid4())
+            model_path = os.path.join(MODELS_DIR, model_id.replace('/', '_'))
 
-                # Set HF token if provided
-                if token:
-                    os.environ['HF_TOKEN'] = token
+            transfer = Transfer(
+                id=transfer_id,
+                name=model_id,
+                transfer_type=TransferType.MODEL_DOWNLOAD,
+                direction='download',
+                source_url=model_id,
+                destination_path=model_path,
+                status=TransferStatus.QUEUED,
+                bandwidth_limit=bandwidth_limit,
+                metadata={'token': token} if token else {}
+            )
+            db.add(transfer)
+            db.commit()
 
-                # Download to models directory
-                model_path = os.path.join(MODELS_DIR, model_id.replace('/', '_'))
-                os.makedirs(model_path, exist_ok=True)
+            # Queue transfer task
+            download_hf_model.apply_async(args=[transfer_id], queue='transfers')
 
-                # Download model and tokenizer
-                AutoModel.from_pretrained(model_id, cache_dir=model_path)
-                AutoTokenizer.from_pretrained(model_id, cache_dir=model_path)
-
-                return {'status': 'completed', 'path': model_path}
-            except Exception as e:
-                return {'status': 'failed', 'error': str(e)}
-
-        # Start download in background
-        from threading import Thread
-        Thread(target=download_model_task, daemon=True).start()
-
-        return jsonify({
-            'status': 'ok',
-            'job_id': job_id,
-            'message': f'Downloading {model_id} in background'
-        })
+            return jsonify({
+                'status': 'ok',
+                'transfer_id': transfer_id,
+                'message': f'Queued download for {model_id}'
+            })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/huggingface/download-dataset', methods=['POST'])
 def huggingface_download_dataset():
-    """Download a dataset from HuggingFace Hub"""
+    """Download a dataset from HuggingFace Hub using transfer queue"""
     data = request.json or {}
     dataset_id = data.get('dataset_id')
     token = data.get('token')
+    bandwidth_limit = data.get('bandwidth_limit')  # bytes per second
 
     if not dataset_id:
         return jsonify({'error': 'dataset_id required'}), 400
 
     try:
-        # Create a background job to download the dataset
-        job_id = str(uuid.uuid4())
+        from models import Transfer, TransferType, TransferStatus
+        from transfer_tasks import download_hf_dataset
 
-        def download_dataset_task():
-            try:
-                from datasets import load_dataset
-                import os
+        with get_db() as db:
+            # Create transfer record
+            transfer_id = str(uuid.uuid4())
+            dataset_name = dataset_id.replace('/', '_')
+            dataset_path = os.path.join(DATASETS_DIR, dataset_name)
 
-                # Set HF token if provided
-                if token:
-                    os.environ['HF_TOKEN'] = token
+            transfer = Transfer(
+                id=transfer_id,
+                name=dataset_id,
+                transfer_type=TransferType.DATASET_DOWNLOAD,
+                direction='download',
+                source_url=dataset_id,
+                destination_path=dataset_path,
+                status=TransferStatus.QUEUED,
+                bandwidth_limit=bandwidth_limit,
+                metadata={'token': token} if token else {}
+            )
+            db.add(transfer)
+            db.commit()
 
-                # Download to datasets directory
-                dataset_name = dataset_id.replace('/', '_')
-                dataset_path = os.path.join(DATASETS_DIR, dataset_name)
-                os.makedirs(dataset_path, exist_ok=True)
+            # Queue transfer task
+            download_hf_dataset.apply_async(args=[transfer_id], queue='transfers')
 
-                # Download dataset
-                ds = load_dataset(dataset_id, cache_dir=dataset_path)
-
-                # Save to disk
-                ds.save_to_disk(os.path.join(dataset_path, 'v1'))
-
-                return {'status': 'completed', 'path': dataset_path}
-            except Exception as e:
-                return {'status': 'failed', 'error': str(e)}
-
-        # Start download in background
-        from threading import Thread
-        Thread(target=download_dataset_task, daemon=True).start()
-
-        return jsonify({
-            'status': 'ok',
-            'job_id': job_id,
-            'message': f'Downloading {dataset_id} in background'
-        })
+            return jsonify({
+                'status': 'ok',
+                'transfer_id': transfer_id,
+                'message': f'Queued download for {dataset_id}'
+            })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ---------------- Transfer Queue API ----------------
+
+@app.route('/api/transfers', methods=['GET'])
+def list_transfers():
+    """List all transfers with optional filtering"""
+    status_filter = request.args.get('status')
+    transfer_type = request.args.get('type')
+    limit = int(request.args.get('limit', 100))
+    offset = int(request.args.get('offset', 0))
+
+    try:
+        from models import Transfer, TransferStatus, TransferType
+
+        with get_db() as db:
+            query = db.query(Transfer)
+
+            # Apply filters
+            if status_filter:
+                query = query.filter(Transfer.status == TransferStatus(status_filter))
+            if transfer_type:
+                query = query.filter(Transfer.transfer_type == TransferType(transfer_type))
+
+            # Order by created_at desc
+            query = query.order_by(Transfer.created_at.desc())
+
+            # Pagination
+            total = query.count()
+            transfers = query.limit(limit).offset(offset).all()
+
+            return jsonify({
+                'transfers': [_serialize_transfer(t) for t in transfers],
+                'total': total,
+                'limit': limit,
+                'offset': offset
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transfers/<transfer_id>', methods=['GET'])
+def get_transfer(transfer_id):
+    """Get transfer details by ID"""
+    try:
+        from models import Transfer
+
+        with get_db() as db:
+            transfer = db.query(Transfer).filter(Transfer.id == transfer_id).first()
+            if not transfer:
+                return jsonify({'error': 'Transfer not found'}), 404
+
+            return jsonify(_serialize_transfer(transfer))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transfers/<transfer_id>/pause', methods=['POST'])
+def pause_transfer_endpoint(transfer_id):
+    """Pause an active transfer"""
+    try:
+        from transfer_tasks import pause_transfer
+
+        result = pause_transfer.apply_async(args=[transfer_id], queue='transfers')
+        return jsonify(result.get(timeout=5))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transfers/<transfer_id>/resume', methods=['POST'])
+def resume_transfer_endpoint(transfer_id):
+    """Resume a paused transfer"""
+    try:
+        from transfer_tasks import resume_transfer
+
+        result = resume_transfer.apply_async(args=[transfer_id], queue='transfers')
+        return jsonify(result.get(timeout=5))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transfers/<transfer_id>/cancel', methods=['POST'])
+def cancel_transfer_endpoint(transfer_id):
+    """Cancel an active or paused transfer"""
+    try:
+        from transfer_tasks import cancel_transfer
+
+        result = cancel_transfer.apply_async(args=[transfer_id], queue='transfers')
+        return jsonify(result.get(timeout=5))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transfers/<transfer_id>', methods=['DELETE'])
+def delete_transfer(transfer_id):
+    """Delete a transfer record"""
+    try:
+        from models import Transfer, TransferStatus
+
+        with get_db() as db:
+            transfer = db.query(Transfer).filter(Transfer.id == transfer_id).first()
+            if not transfer:
+                return jsonify({'error': 'Transfer not found'}), 404
+
+            # Can only delete completed, failed, or cancelled transfers
+            if transfer.status in [TransferStatus.DOWNLOADING, TransferStatus.UPLOADING]:
+                return jsonify({
+                    'error': 'Cannot delete active transfer. Cancel it first.'
+                }), 400
+
+            db.delete(transfer)
+            db.commit()
+
+            return jsonify({'status': 'ok', 'message': 'Transfer deleted'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transfers/stats', methods=['GET'])
+def get_transfer_stats():
+    """Get bandwidth manager statistics"""
+    try:
+        from bandwidth_manager import get_bandwidth_manager
+        from models import Transfer, TransferStatus
+
+        bw_manager = get_bandwidth_manager()
+        stats = bw_manager.get_stats()
+
+        # Add database stats
+        with get_db() as db:
+            active_count = db.query(Transfer).filter(
+                Transfer.status.in_([TransferStatus.DOWNLOADING, TransferStatus.UPLOADING])
+            ).count()
+            queued_count = db.query(Transfer).filter(
+                Transfer.status == TransferStatus.QUEUED
+            ).count()
+
+            stats['active_transfers_db'] = active_count
+            stats['queued_transfers'] = queued_count
+
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transfers/settings', methods=['GET', 'PUT'])
+def transfer_settings():
+    """Get or update transfer bandwidth settings"""
+    try:
+        from bandwidth_manager import get_bandwidth_manager
+
+        bw_manager = get_bandwidth_manager()
+
+        if request.method == 'GET':
+            return jsonify({
+                'global_limit_bps': bw_manager.global_limit_bps,
+                'max_concurrent': bw_manager.max_concurrent
+            })
+        else:  # PUT
+            data = request.json or {}
+            global_limit = data.get('global_limit_bps')
+            max_concurrent = data.get('max_concurrent')
+
+            if global_limit is not None:
+                bw_manager.global_limit_bps = global_limit
+                # Reinitialize global bucket
+                if global_limit > 0:
+                    from bandwidth_manager import TokenBucket
+                    bw_manager.global_bucket = TokenBucket(
+                        capacity=global_limit * 2,
+                        rate=global_limit
+                    )
+                else:
+                    bw_manager.global_bucket = None
+
+            if max_concurrent is not None:
+                bw_manager.max_concurrent = max_concurrent
+
+            return jsonify({
+                'status': 'ok',
+                'global_limit_bps': bw_manager.global_limit_bps,
+                'max_concurrent': bw_manager.max_concurrent
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _serialize_transfer(transfer) -> dict:
+    """Serialize Transfer model to JSON"""
+    return {
+        'id': transfer.id,
+        'name': transfer.name,
+        'transfer_type': transfer.transfer_type.value,
+        'direction': transfer.direction,
+        'source_url': transfer.source_url,
+        'destination_path': transfer.destination_path,
+        'size_bytes': transfer.size_bytes,
+        'bytes_transferred': transfer.bytes_transferred,
+        'progress': round(transfer.progress, 2),
+        'current_rate': transfer.current_rate,
+        'average_rate': transfer.average_rate,
+        'bandwidth_limit': transfer.bandwidth_limit,
+        'status': transfer.status.value,
+        'priority': transfer.priority,
+        'retries': transfer.retries,
+        'max_retries': transfer.max_retries,
+        'error_message': transfer.error_message,
+        'created_at': transfer.created_at.isoformat() if transfer.created_at else None,
+        'started_at': transfer.started_at.isoformat() if transfer.started_at else None,
+        'completed_at': transfer.completed_at.isoformat() if transfer.completed_at else None,
+        'updated_at': transfer.updated_at.isoformat() if transfer.updated_at else None,
+        'eta_seconds': transfer.eta_seconds,
+        'celery_task_id': transfer.celery_task_id,
+    }
 
 
 # ---------------- Teams ----------------
@@ -6994,6 +7202,19 @@ def storage_checkpoints_cleanup():
         except Exception:
             pass
     return jsonify({'status': 'ok', 'cleaned': cleaned})
+
+# Initialize bandwidth manager on startup
+from bandwidth_manager import init_bandwidth_manager
+
+# Default: 10 MB/s global limit, max 3 concurrent transfers
+# Can be configured via environment variables
+GLOBAL_BANDWIDTH_LIMIT = int(os.getenv('TRANSFER_GLOBAL_LIMIT_BPS', 10 * 1024 * 1024))  # 10 MB/s
+MAX_CONCURRENT_TRANSFERS = int(os.getenv('MAX_CONCURRENT_TRANSFERS', 3))
+
+init_bandwidth_manager(
+    global_limit_bps=GLOBAL_BANDWIDTH_LIMIT if GLOBAL_BANDWIDTH_LIMIT > 0 else None,
+    max_concurrent=MAX_CONCURRENT_TRANSFERS
+)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
