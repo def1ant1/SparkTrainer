@@ -19,31 +19,42 @@ const API_BASE = (import.meta.env && import.meta.env.VITE_API_URL)
   ? `${String(import.meta.env.VITE_API_URL).replace(/\/$/, '')}/api`
   : '/api';
 
+// Helper: robust JSON parsing that tolerates empty bodies
+const jsonOrEmpty = async (res) => {
+  const text = await res.text();
+  if (!res.ok) {
+    // Surface server-provided error text if available
+    throw new Error(text || res.statusText);
+  }
+  if (!text) return {};
+  try { return JSON.parse(text); } catch (e) { throw new Error('Invalid JSON response'); }
+};
+
 const api = {
-  getSystemInfo: () => fetch(`${API_BASE}/system/info`).then(r => r.json()),
-  getPartitions: () => fetch(`${API_BASE}/gpu/partitions`).then(r => r.json()),
-  getPartitionConfig: () => fetch(`${API_BASE}/gpu/partition/config`).then(r => r.json()),
-  applyPartitionConfig: (payload) => fetch(`${API_BASE}/gpu/partition/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(async r => { if(!r.ok) { const t = await r.text(); throw new Error(t || r.statusText); } return r.json(); }),
-  getMetricsHistory: () => fetch(`${API_BASE}/system/metrics/history`).then(r => r.json()),
-  getFrameworks: () => fetch(`${API_BASE}/frameworks`).then(r => r.json()),
-  getJobs: () => fetch(`${API_BASE}/jobs`).then(r => r.json()),
-  getJob: (id) => fetch(`${API_BASE}/jobs/${id}`).then(r => r.json()),
+  getSystemInfo: () => fetch(`${API_BASE}/system/info`).then(jsonOrEmpty),
+  getPartitions: () => fetch(`${API_BASE}/gpu/partitions`).then(jsonOrEmpty),
+  getPartitionConfig: () => fetch(`${API_BASE}/gpu/partition/config`).then(jsonOrEmpty),
+  applyPartitionConfig: (payload) => fetch(`${API_BASE}/gpu/partition/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(jsonOrEmpty),
+  getMetricsHistory: () => fetch(`${API_BASE}/system/metrics/history`).then(jsonOrEmpty),
+  getFrameworks: () => fetch(`${API_BASE}/frameworks`).then(jsonOrEmpty),
+  getJobs: () => fetch(`${API_BASE}/jobs`).then(jsonOrEmpty),
+  getJob: (id) => fetch(`${API_BASE}/jobs/${id}`).then(jsonOrEmpty),
   createJob: (data) => fetch(`${API_BASE}/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
-  }).then(r => r.json()),
+  }).then(jsonOrEmpty),
   cancelJob: (id) => fetch(`${API_BASE}/jobs/${id}/cancel`, {
     method: 'POST'
-  }).then(r => r.json()),
-  getModels: () => fetch(`${API_BASE}/models`).then(r => r.json()),
-  getModelsRaw: (query) => fetch(`${API_BASE}/models${query?`?${query}`:''}`).then(r => r.json()),
-  getModel: (id) => fetch(`${API_BASE}/models/${id}`).then(r => r.json()),
-  updateModelMetadata: (id, payload) => fetch(`${API_BASE}/models/${id}/metadata`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r => r.json()),
-  updateModelCard: (id, payload) => fetch(`${API_BASE}/models/${id}/card`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r => r.json()),
-  bulkDeleteModels: (ids) => fetch(`${API_BASE}/models/bulk_delete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})}).then(r => r.json()),
+  }).then(jsonOrEmpty),
+  getModels: () => fetch(`${API_BASE}/models`).then(jsonOrEmpty),
+  getModelsRaw: (query) => fetch(`${API_BASE}/models${query?`?${query}`:''}`).then(jsonOrEmpty),
+  getModel: (id) => fetch(`${API_BASE}/models/${id}`).then(jsonOrEmpty),
+  updateModelMetadata: (id, payload) => fetch(`${API_BASE}/models/${id}/metadata`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(jsonOrEmpty),
+  updateModelCard: (id, payload) => fetch(`${API_BASE}/models/${id}/card`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(jsonOrEmpty),
+  bulkDeleteModels: (ids) => fetch(`${API_BASE}/models/bulk_delete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})}).then(jsonOrEmpty),
   exportModelsUrl: (ids) => `${API_BASE}/models/export?ids=${ids.join(',')}`,
-  saveModel: (payload) => fetch(`${API_BASE}/models/save`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(r => r.json())
+  saveModel: (payload) => fetch(`${API_BASE}/models/save`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}).then(jsonOrEmpty)
 };
 // Extended API for wizard
 api.validateJob = (payload) => fetch(`${API_BASE}/jobs/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(async r => r.json());
