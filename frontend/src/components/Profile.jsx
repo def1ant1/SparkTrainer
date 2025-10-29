@@ -862,11 +862,11 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
-    </div>
 
-    {/* Transfer Queue Modal */}
-    {showTransferQueue && (
-      <TransferQueue onClose={() => setShowTransferQueue(false)} />
-    )}
+      {/* Transfer Queue Modal */}
+      {showTransferQueue && (
+        <TransferQueue onClose={() => setShowTransferQueue(false)} />
+      )}
+    </div>
   );
 }
