@@ -7388,5 +7388,9 @@ init_bandwidth_manager(
     max_concurrent=MAX_CONCURRENT_TRANSFERS
 )
 
+# Register experiment API blueprint (enhanced experiment creation)
+from experiment_api import experiment_bp
+app.register_blueprint(experiment_bp)
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
