@@ -11,20 +11,28 @@ from sqlalchemy.pool import NullPool
 
 from models import Base
 
-# Database URL from environment
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://sparktrainer:sparktrainer_dev_pass@localhost:5432/sparktrainer"
-)
+# Database URL from environment; default to local SQLite for easier dev bring-up
+DEFAULT_SQLITE_PATH = os.path.join(os.path.dirname(__file__), 'sparktrainer.db')
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_SQLITE_PATH}")
 
-# Create engine with connection pooling
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,  # Verify connections before using
-    pool_size=10,
-    max_overflow=20,
-    echo=os.getenv("SQL_DEBUG", "false").lower() == "true"
-)
+# Create engine with sensible defaults per backend
+SQL_DEBUG = os.getenv("SQL_DEBUG", "false").lower() == "true"
+if DATABASE_URL.startswith('sqlite'):
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        poolclass=NullPool,  # SQLite in dev: avoid threading issues
+        connect_args={"check_same_thread": False},
+        echo=SQL_DEBUG,
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+        echo=SQL_DEBUG,
+    )
 
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

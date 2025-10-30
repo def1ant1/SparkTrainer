@@ -41,7 +41,7 @@ def create_sample_data():
             id="proj_sample_001",
             name="Sample ML Project",
             description="A sample project demonstrating SparkTrainer capabilities",
-            metadata={"created_by": "init_script"}
+            meta={"created_by": "init_script"}
         )
         session.add(project)
 

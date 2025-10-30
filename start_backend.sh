@@ -10,8 +10,25 @@ fi
 
 source venv/bin/activate
 
-# Install dependencies if Flask is missing (first run) or when explicitly requested
-if ! python -c "import flask" >/dev/null 2>&1; then
+# Install dependencies if critical packages are missing
+NEED_PG=0
+if [ -n "${DATABASE_URL}" ] && echo "$DATABASE_URL" | grep -qi '^postgres'; then
+  NEED_PG=1
+fi
+
+if [ "$NEED_PG" = "1" ]; then
+  PKG_CHECK="import flask, psycopg2"
+else
+  PKG_CHECK="import flask"
+fi
+
+if ! python - <<PY
+try:
+    $PKG_CHECK
+except Exception:
+    raise SystemExit(1)
+PY
+then
   echo "Installing backend dependencies..."
   python -m pip install --upgrade pip wheel
   pip install -r requirements.txt

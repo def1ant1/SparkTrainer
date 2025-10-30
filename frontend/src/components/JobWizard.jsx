@@ -137,6 +137,42 @@ export default function JobWizard({ onNavigate, frameworks, partitions, api }) {
   });
 
   useEffect(() => {
+    // Prefill from Models/Templates selection if available
+    try {
+      const raw = localStorage.getItem('jobWizard.template');
+      if (raw) {
+        const t = JSON.parse(raw);
+        setName(t.name || 'Template Job');
+        const tf = t.training || {};
+        const tm = t.model || {};
+        if (tf.framework) setFramework(tf.framework);
+        if (tm.architecture) setArch('transformer');
+        if (tf.num_epochs) setEpochs(tf.num_epochs);
+        if (tf.batch_size) setBatchSize(tf.batch_size);
+        if (tf.learning_rate) setLr(tf.learning_rate);
+        if (tf.gradient_accumulation_steps) setGradAccum(tf.gradient_accumulation_steps);
+        if (tf.precision) setPrecision(tf.precision);
+        if (tf.optimizer) setOptimizer(tf.optimizer);
+        if (tf.scheduler) setScheduler(tf.scheduler);
+        if (tm.base_model && tf.framework === 'huggingface') setHfModel(tm.base_model);
+        if (tf.use_lora || tf.lora_config) {
+          const lc = tf.lora_config || {};
+          setLora(prev => ({
+            ...prev,
+            enabled: true,
+            r: lc.r ?? prev.r,
+            alpha: lc.lora_alpha ?? prev.alpha,
+            dropout: lc.lora_dropout ?? prev.dropout,
+            target_modules: lc.target_modules || prev.target_modules,
+          }));
+        }
+      }
+      localStorage.removeItem('jobWizard.template');
+    } catch {}
+  }, []);
+
+  // Auto-select a free MIG or GPU when in 'select' mode
+  useEffect(() => {
     if (gpuMode !== 'select') return;
     if (gpuSelection) return;
     let pick = '';

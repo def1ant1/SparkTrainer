@@ -16,7 +16,7 @@ const useToast = () => {
   };
 };
 
-export function ModelsPage({ api, onOpen, onCompare }) {
+export function ModelsPage({ api, onOpen, onCompare, onNavigate }) {
   const [mode, setMode] = useState('models'); // 'models' or 'templates'
   const [items, setItems] = useState([]);
   const [view, setView] = useState('grid');
@@ -127,7 +127,7 @@ export function ModelsPage({ api, onOpen, onCompare }) {
       </div>
 
       {mode === 'templates' ? (
-        <ModelTemplatesView api={api} toast={toast} />
+        <ModelTemplatesView api={api} toast={toast} onNavigate={onNavigate} />
       ) : (
         <>
 
@@ -560,7 +560,7 @@ const iconMap = {
   'type': '📝'
 };
 
-export function ModelTemplatesView({ api, toast }) {
+export function ModelTemplatesView({ api, toast, onNavigate }) {
   const [templates, setTemplates] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedTemplate, setSelectedTemplate] = useState(null);
@@ -616,7 +616,7 @@ export function ModelTemplatesView({ api, toast }) {
     : templateList.filter(([_, t]) => t.category === selectedCategory);
 
   if (selectedTemplate) {
-    return <TemplateDetail template={selectedTemplate} onBack={() => setSelectedTemplate(null)} toast={toast} />;
+    return <TemplateDetail template={selectedTemplate} onBack={() => setSelectedTemplate(null)} toast={toast} onNavigate={onNavigate} />;
   }
 
   return (
@@ -710,12 +710,16 @@ function TemplateCard({ id, template, onClick }) {
   );
 }
 
-function TemplateDetail({ template, onBack, toast }) {
+function TemplateDetail({ template, onBack, toast, onNavigate }) {
   const [selectedConfig, setSelectedConfig] = useState('training');
 
   const startTraining = () => {
-    toast.push({ type: 'info', title: 'Starting training with template', message: template.name });
-    // TODO: Navigate to job wizard with this template pre-filled
+    try {
+      // Persist template for Job Wizard prefill
+      localStorage.setItem('jobWizard.template', JSON.stringify(template));
+    } catch {}
+    toast.push({ type: 'success', title: 'Template loaded', message: 'Opening Job Wizard...' });
+    if (onNavigate) onNavigate('wizard');
   };
 
   return (

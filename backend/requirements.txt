@@ -11,6 +11,7 @@ marshmallow==3.21.1
 flask-limiter==3.5.0
 alembic==1.13.1
 sqlalchemy==2.0.29
+psycopg2-binary>=2.9.0
 flask-socketio==5.3.6
 python-socketio==5.11.1
 redis==5.0.3

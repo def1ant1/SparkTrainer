@@ -1481,7 +1481,7 @@ export default function App() {
         )}
         {currentPage === 'models' && !modelView.id && modelView.compareIds.length===0 && (
           <PageWithSidebars onNavigate={setCurrentPage} jobs={jobs} systemInfo={systemInfo}>
-            <ModelsPage api={api} onOpen={(id)=> setModelView({ id, compareIds: [] })} onCompare={(ids)=> setModelView({ id: null, compareIds: ids })} />
+            <ModelsPage api={api} onOpen={(id)=> setModelView({ id, compareIds: [] })} onCompare={(ids)=> setModelView({ id: null, compareIds: ids })} onNavigate={setCurrentPage} />
           </PageWithSidebars>
         )}
         {currentPage === 'models' && modelView.id && (

@@ -113,7 +113,7 @@ def base_models():
                 tokenizer_path=data.get('tokenizer_path'),
                 vocab_size=data.get('vocab_size'),
                 tags=data.get('tags', []),
-                metadata=data.get('metadata', {}),
+                meta=data.get('metadata', {}),
                 model_card=data.get('model_card'),
             )
 
@@ -143,7 +143,9 @@ def base_model_detail(model_id):
             return jsonify(_serialize_base_model(model)), 200
 
         elif request.method == 'PUT':
-            data = request.json
+            data = request.json or {}
+            if 'metadata' in data and 'meta' not in data:
+                data['meta'] = data.pop('metadata')
 
             # Update fields
             for key, value in data.items():
@@ -218,7 +220,7 @@ def recipes():
                 template_path=data.get('template_path'),
                 script_template=data.get('script_template'),
                 tags=data.get('tags', []),
-                metadata=data.get('metadata', {}),
+                meta=data.get('metadata', {}),
                 is_active=data.get('is_active', True),
             )
 
@@ -248,7 +250,9 @@ def recipe_detail(recipe_id):
             return jsonify(_serialize_recipe(recipe)), 200
 
         elif request.method == 'PUT':
-            data = request.json
+            data = request.json or {}
+            if 'metadata' in data and 'meta' not in data:
+                data['meta'] = data.pop('metadata')
             for key, value in data.items():
                 if hasattr(recipe, key) and key != 'id':
                     setattr(recipe, key, value)
@@ -319,7 +323,7 @@ def adapters():
                 checksum=data.get('checksum'),
                 metrics=data.get('metrics', {}),
                 tags=data.get('tags', []),
-                metadata=data.get('metadata', {}),
+                meta=data.get('metadata', {}),
             )
 
             session.add(adapter)
@@ -348,7 +352,9 @@ def adapter_detail(adapter_id):
             return jsonify(_serialize_adapter(adapter)), 200
 
         elif request.method == 'PUT':
-            data = request.json
+            data = request.json or {}
+            if 'metadata' in data and 'meta' not in data:
+                data['meta'] = data.pop('metadata')
             for key, value in data.items():
                 if hasattr(adapter, key) and key != 'id':
                     setattr(adapter, key, value)
@@ -786,7 +792,7 @@ def _serialize_base_model(model: BaseModel) -> Dict:
         'tokenizer_path': model.tokenizer_path,
         'vocab_size': model.vocab_size,
         'tags': model.tags,
-        'metadata': model.metadata,
+        'metadata': model.meta,
         'model_card': model.model_card,
         'created_at': model.created_at.isoformat() if model.created_at else None,
         'updated_at': model.updated_at.isoformat() if model.updated_at else None,
@@ -814,7 +820,7 @@ def _serialize_recipe(recipe: Recipe) -> Dict:
         'supports_distributed': recipe.supports_distributed,
         'template_path': recipe.template_path,
         'tags': recipe.tags,
-        'metadata': recipe.metadata,
+        'metadata': recipe.meta,
         'is_active': recipe.is_active,
         'created_at': recipe.created_at.isoformat() if recipe.created_at else None,
         'updated_at': recipe.updated_at.isoformat() if recipe.updated_at else None,
@@ -843,7 +849,7 @@ def _serialize_adapter(adapter: Adapter) -> Dict:
         'checksum': adapter.checksum,
         'metrics': adapter.metrics,
         'tags': adapter.tags,
-        'metadata': adapter.metadata,
+        'metadata': adapter.meta,
         'created_at': adapter.created_at.isoformat() if adapter.created_at else None,
         'updated_at': adapter.updated_at.isoformat() if adapter.updated_at else None,
     }
@@ -871,7 +877,7 @@ def _serialize_dataset(dataset: Dataset) -> Dict:
         'integrity_report': dataset.integrity_report,
         'statistics': dataset.statistics,
         'tags': dataset.tags,
-        'metadata': dataset.metadata,
+        'metadata': dataset.meta,
         'created_at': dataset.created_at.isoformat() if dataset.created_at else None,
         'updated_at': dataset.updated_at.isoformat() if dataset.updated_at else None,
     }

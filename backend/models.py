@@ -80,7 +80,7 @@ class Project(Base):
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     # Relationships
     experiments = relationship("Experiment", back_populates="project", cascade="all, delete-orphan")
@@ -117,7 +117,7 @@ class Dataset(Base):
     # Metadata
     statistics = Column(JSON, default={})  # Dataset statistics
     tags = Column(JSON, default=[])
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
@@ -178,7 +178,7 @@ class BaseModel(Base):
 
     # Metadata
     tags = Column(JSON, default=[])
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
     model_card = Column(Text, nullable=True)
 
     # Timestamps
@@ -226,7 +226,7 @@ class Recipe(Base):
 
     # Metadata
     tags = Column(JSON, default=[])
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
     is_active = Column(Boolean, default=True)
 
     # Timestamps
@@ -273,7 +273,7 @@ class Adapter(Base):
 
     # Metadata
     tags = Column(JSON, default=[])
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
@@ -338,7 +338,7 @@ class Experiment(Base):
 
     # Metadata
     tags = Column(JSON, default=[])
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
     starred = Column(Boolean, default=False)
 
     # Timestamps
@@ -401,7 +401,7 @@ class Job(Base):
 
     # Configuration
     config = Column(JSON, default={})
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
@@ -459,7 +459,7 @@ class Job(Base):
             from_status=old_status,
             to_status=new_status,
             reason=reason,
-            metadata=metadata or {}
+            meta=metadata or {}
         )
         session.add(transition)
 
@@ -477,7 +477,7 @@ class JobStatusTransition(Base):
     to_status = Column(Enum(JobStatus), nullable=False)
 
     reason = Column(Text, nullable=True)
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     timestamp = Column(DateTime, server_default=func.now())
 
@@ -517,7 +517,7 @@ class Artifact(Base):
 
     # Metadata
     tags = Column(JSON, default=[])
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
@@ -554,7 +554,7 @@ class Evaluation(Base):
     num_samples = Column(Integer, nullable=True)
 
     # Metadata
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
@@ -626,7 +626,7 @@ class Transfer(Base):
     eta_seconds = Column(Integer, nullable=True)  # Estimated time remaining
 
     # Metadata
-    metadata = Column(JSON, default={})  # Store HF token, config options, etc.
+    meta = Column('metadata', JSON, default={})  # Store HF token, config options, etc.
 
     __table_args__ = (
         Index("idx_transfer_status", "status"),
@@ -706,7 +706,7 @@ class LeaderboardEntry(Base):
     model_type = Column(String(100), nullable=True)
 
     # Metadata
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
@@ -740,7 +740,7 @@ class Activity(Base):
     project_id = Column(String(36), nullable=True)
 
     # Metadata
-    metadata = Column(JSON, default={})
+    meta = Column('metadata', JSON, default={})
 
     # Read status (for notification management)
     read = Column(Boolean, default=False)
