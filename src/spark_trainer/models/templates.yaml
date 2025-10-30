@@ -239,6 +239,160 @@ templates:
       recommended_gpu: "A100 or H100"
 
   # ===================================================================
+  # POLYMORPHNET-X MULTIMODAL MODEL (Apotheon.ai)
+  # ===================================================================
+  polymorphnetx-multimodal:
+    name: "PolymorphNet-X Multimodal"
+    description: "Apotheon.ai's large-scale multimodal model with MoE architecture for text, image, video, and audio"
+    category: "multimodal"
+    icon: "layers"
+    tags: ["multimodal", "vision", "language", "audio", "video", "moe", "apotheon"]
+    model:
+      base_model: "custom"
+      pretrained: false
+      architecture: "polymorphnetx"
+      input_modalities: ["text", "image", "video", "audio"]
+      output_type: "text"
+      components:
+        core_model:
+          type: "polymorphnetx"
+          d_model: 12288
+          n_layers: 48
+          n_heads: 64
+          vocab_size: 131072
+          max_seq_len: 8192
+          dropout: 0.1
+        moe:
+          n_experts: 64
+          top_k: 4
+          expert_ffn_dim: 65536
+          capacity_factor: 1.25
+        adapters:
+          image_adapter:
+            type: "conv2d_patch"
+            patch_size: 16
+            in_channels: 3
+          audio_adapter:
+            type: "stft_conv1d"
+            n_fft: 512
+            hop_length: 256
+        special_tokens:
+          PAD: 0
+          UNK: 1
+          BOS: 2
+          EOS: 3
+          AGENT: 10
+          MEM: 11
+          PLUGIN: 12
+          VERIFY: 13
+          PRECISION: 14
+          NODE: 15
+          POLICY: 16
+          IMG: 17
+          IMG_END: 18
+          AUD: 19
+          AUD_END: 20
+        tokenizer:
+          type: "sentencepiece"
+          model_prefix: "configs/spm"
+          vocab_size: 50000
+      objectives:
+        - name: "causal_language_modeling"
+          weight: 1.0
+          loss: "cross_entropy"
+        - name: "multimodal_understanding"
+          weight: 0.8
+          loss: "cross_entropy"
+        - name: "load_balance"
+          weight: 0.01
+          loss: "moe_auxiliary"
+    training:
+      framework: "pytorch"
+      precision: "fp16"
+      batch_size: 2
+      gradient_accumulation_steps: 16
+      learning_rate: 3.0e-4
+      num_epochs: 20
+      optimizer: "adamw"
+      weight_decay: 0.1
+      scheduler: "cosine"
+      warmup_steps: 2000
+      total_steps: 100000
+      max_grad_norm: 1.0
+      # Advanced training features
+      gradient_checkpointing: true
+      mixed_precision: true
+      use_ema: true
+      ema_decay: 0.999
+      distributed:
+        strategy: "deepspeed_zero3"
+        cpu_offload: true
+        offload_optimizer: true
+      # Curriculum learning for multimodal
+      curriculum:
+        enabled: true
+        stages:
+          - steps: [0, 20000]
+            modalities: ["text"]
+            description: "Text-only warm-up"
+          - steps: [20000, 50000]
+            modalities: ["text", "image"]
+            description: "Add vision modality"
+          - steps: [50000, 100000]
+            modalities: ["text", "image", "audio", "video"]
+            description: "Full multimodal training"
+    data:
+      format: "multimodal_manifest"
+      manifest_schema: "v1"
+      preprocessing:
+        video:
+          extract_frames: true
+          num_frames: 8
+          frame_rate: 1
+          resolution: [224, 224]
+        audio:
+          extract: true
+          sample_rate: 16000
+          max_length: 30
+        image:
+          resize: [224, 224]
+          normalize: true
+        text:
+          max_length: 8192
+          tokenizer: "sentencepiece"
+      sources:
+        - type: "video_with_audio"
+          caption_backend: "blip2"
+          transcription_backend: "whisper"
+        - type: "image_caption"
+          caption_backend: "blip2"
+        - type: "audio_transcript"
+          transcription_backend: "whisper"
+        - type: "text_corpus"
+          format: "jsonl"
+    metrics:
+      general:
+        - "loss"
+        - "perplexity"
+        - "token_accuracy"
+      moe:
+        - "expert_load_balance"
+        - "router_entropy"
+      multimodal:
+        - "modality_specific_accuracy"
+    evaluation:
+      benchmarks:
+        - "coco_captions"
+        - "librispeech"
+        - "flickr30k"
+        - "msrvtt"
+    resources:
+      min_gpu_memory: "80GB"
+      recommended_gpu: "H100, A100-80GB, or 8x A100-40GB"
+      min_cpu_memory: "256GB"
+      storage: "1TB for checkpoints and data"
+
+  # ===================================================================
   # APOTHEON MULTIMODAL MODEL (NEW)
   # ===================================================================
   apotheon-multimodal:
