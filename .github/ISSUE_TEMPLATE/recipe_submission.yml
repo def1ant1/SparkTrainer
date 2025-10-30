@@ -1,0 +1,222 @@
+name: Recipe Submission
+description: Submit a new training recipe for SparkTrainer
+title: "[Recipe]: "
+labels: ["feature", "recipe"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for submitting a new training recipe! Recipes are a core part of SparkTrainer.
+        Please provide the details below to help us review and integrate your recipe.
+
+  - type: input
+    id: recipe-name
+    attributes:
+      label: Recipe Name
+      description: What is the name of your recipe?
+      placeholder: e.g., "LoRA Fine-tuning for Video Classification"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Recipe Description
+      description: Describe what this recipe does and its purpose
+      placeholder: |
+        This recipe implements...
+        It is designed for...
+        Use cases include...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: model-type
+    attributes:
+      label: Model Type
+      description: What type of model does this recipe target?
+      options:
+        - Language Model (LLM)
+        - Vision Model
+        - Vision-Language Model
+        - Audio Model
+        - Video Model
+        - Diffusion Model
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: training-method
+    attributes:
+      label: Training Method
+      description: What training method does this recipe use?
+      options:
+        - Full Fine-tuning
+        - LoRA
+        - QLoRA
+        - Prefix Tuning
+        - Adapter Tuning
+        - Knowledge Distillation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: features
+    attributes:
+      label: Key Features
+      description: List the key features and capabilities of this recipe
+      placeholder: |
+        - Feature 1
+        - Feature 2
+        - Feature 3
+    validations:
+      required: true
+
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Configuration Options
+      description: Describe the main configuration parameters
+      placeholder: |
+        - learning_rate: Learning rate for training
+        - batch_size: Training batch size
+        - num_epochs: Number of training epochs
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Hardware Requirements
+      description: What are the minimum hardware requirements?
+      placeholder: |
+        - GPU: NVIDIA GPU with XX GB VRAM
+        - RAM: XX GB
+        - Storage: XX GB
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Additional Dependencies
+      description: List any additional Python packages or system dependencies
+      placeholder: |
+        - package-name>=1.0.0
+        - another-package
+      render: text
+
+  - type: textarea
+    id: example-usage
+    attributes:
+      label: Example Usage
+      description: Provide a code example showing how to use the recipe
+      render: python
+      placeholder: |
+        from spark_trainer.recipes.my_recipe import MyRecipe
+
+        config = {
+            "base_model": "...",
+            "dataset_name": "...",
+            ...
+        }
+
+        recipe = MyRecipe(config)
+        recipe.run()
+    validations:
+      required: true
+
+  - type: textarea
+    id: dataset-format
+    attributes:
+      label: Dataset Format
+      description: Describe the expected dataset format
+      placeholder: |
+        This recipe expects data in the following format:
+        {"prompt": "...", "completion": "...", ...}
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Expected Results
+      description: What kind of results can users expect?
+      placeholder: |
+        - Training time: ~X hours on Y GPU
+        - Final loss: ~X.XX
+        - Evaluation metric: X.XX
+        - ...
+
+  - type: textarea
+    id: testing
+    attributes:
+      label: Testing
+      description: How have you tested this recipe?
+      placeholder: |
+        - Tested on dataset: ...
+        - Hardware used: ...
+        - Training time: ...
+        - Results: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: documentation
+    attributes:
+      label: Documentation
+      description: Have you included documentation?
+      placeholder: |
+        - Docstrings: Yes/No
+        - README: Yes/No
+        - Examples: Yes/No
+        - Tutorial: Yes/No
+
+  - type: input
+    id: pr-link
+    attributes:
+      label: Pull Request
+      description: If you've already created a PR, link it here
+      placeholder: https://github.com/def1ant1/SparkTrainer/pull/XXX
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Links to papers, blog posts, or other resources
+      placeholder: |
+        - Paper: https://arxiv.org/abs/...
+        - Blog post: ...
+        - Original implementation: ...
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other information about the recipe
+      placeholder: |
+        - Known limitations
+        - Future improvements
+        - Related recipes
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      description: Please confirm the following
+      options:
+        - label: The recipe follows the RecipeInterface pattern
+          required: true
+        - label: The recipe includes comprehensive docstrings
+          required: true
+        - label: The recipe has been tested successfully
+          required: true
+        - label: Tests are included with >80% coverage
+          required: true
+        - label: Documentation and examples are provided
+          required: true
+        - label: Code follows SparkTrainer style guidelines
+          required: true

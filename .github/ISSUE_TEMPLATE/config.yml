@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a Question
+    url: https://github.com/def1ant1/SparkTrainer/discussions/new?category=q-a
+    about: Ask questions and discuss ideas with the community
+  - name: General Discussion
+    url: https://github.com/def1ant1/SparkTrainer/discussions
+    about: Engage with the community, share ideas, and get help
+  - name: Documentation
+    url: https://github.com/def1ant1/SparkTrainer#readme
+    about: Read the documentation and guides
