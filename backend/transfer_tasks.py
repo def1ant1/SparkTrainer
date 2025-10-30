@@ -283,12 +283,99 @@ def download_hf_dataset(self, transfer_id: str) -> Dict[str, Any]:
             transfer.progress = 100.0
             db.commit()
 
+            # Import dataset into registry
+            from models import Dataset as DatasetModel, Activity
+            import hashlib
+
+            # Check if dataset already exists
+            dataset_name = transfer.name or dataset_id.split('/')[-1]
+            existing_dataset = db.query(DatasetModel).filter(
+                DatasetModel.name == dataset_name
+            ).first()
+
+            if not existing_dataset:
+                # Calculate checksum from dataset_id and destination path
+                checksum = hashlib.sha256(
+                    f"{dataset_id}:{destination_path}".encode()
+                ).hexdigest()
+
+                # Determine modality from dataset features
+                modality = "text"  # Default
+                if dataset:
+                    first_split = list(dataset.keys())[0] if dataset.keys() else None
+                    if first_split:
+                        features = dataset[first_split].features
+                        if any('image' in str(k).lower() for k in features.keys()):
+                            modality = "image"
+                        elif any('audio' in str(k).lower() for k in features.keys()):
+                            modality = "audio"
+                        elif any('video' in str(k).lower() for k in features.keys()):
+                            modality = "video"
+
+                # Count total samples
+                total_samples = sum(len(dataset[split]) for split in dataset.keys())
+
+                # Create dataset entry
+                new_dataset = DatasetModel(
+                    id=str(uuid.uuid4()),
+                    project_id=transfer.metadata.get('project_id'),  # If provided
+                    name=dataset_name,
+                    version="1.0",
+                    description=f"Downloaded from HuggingFace: {dataset_id}",
+                    modality=modality,
+                    size_bytes=dataset_size,
+                    num_samples=total_samples,
+                    manifest_path=None,  # HF datasets don't have manifest
+                    storage_path=str(destination_path),
+                    checksum=checksum,
+                    integrity_checked=True,
+                    integrity_passed=True,
+                    integrity_report={},
+                    statistics={
+                        'splits': list(dataset.keys()),
+                        'num_splits': len(dataset.keys()),
+                    },
+                    tags=['huggingface', 'imported'],
+                    metadata={
+                        'source': 'huggingface',
+                        'hf_repo_id': dataset_id,
+                        'transfer_id': transfer_id,
+                        'version_hash': checksum[:16],
+                    }
+                )
+                db.add(new_dataset)
+                db.commit()
+
+                # Create activity event
+                activity = Activity(
+                    id=str(uuid.uuid4()),
+                    event_type='dataset_imported',
+                    entity_type='dataset',
+                    entity_id=new_dataset.id,
+                    title=f'Dataset imported: {dataset_name}',
+                    message=f'Successfully downloaded dataset from HuggingFace: {dataset_id}',
+                    status='success',
+                    user_id=transfer.metadata.get('user_id'),
+                    project_id=transfer.metadata.get('project_id'),
+                    metadata={
+                        'dataset_id': new_dataset.id,
+                        'dataset_name': dataset_name,
+                        'hf_repo_id': dataset_id,
+                        'size_bytes': dataset_size,
+                        'num_samples': total_samples,
+                    },
+                    read=False,
+                )
+                db.add(activity)
+                db.commit()
+
             return {
                 "status": "completed",
                 "transfer_id": transfer_id,
                 "dataset_id": dataset_id,
                 "download_path": str(destination_path),
-                "size_bytes": dataset_size
+                "size_bytes": dataset_size,
+                "imported_to_registry": not existing_dataset
             }
 
         except Exception as e:
