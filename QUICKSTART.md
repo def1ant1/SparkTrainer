@@ -1,285 +1,447 @@
-# DGX AI Trainer - Quick Start Guide
+# SparkTrainer Quick Start Guide
 
-## 🚀 Getting Started in 5 Minutes
+Get SparkTrainer up and running in **5 minutes** and train your first AI model!
 
-### Step 1: Extract the Application
-```bash
-tar -xzf dgx-ai-trainer.tar.gz
-cd dgx-ai-trainer
-```
+## Prerequisites Check
 
-### Step 2: Run Setup
-```bash
-chmod +x setup.sh
-./setup.sh
-```
+Before starting, verify you have:
 
-This will:
-- Create Python virtual environment
-- Install all dependencies (PyTorch, TensorFlow, Transformers)
-- Install React frontend dependencies
-- Create startup scripts
+### Required
+- **Docker** installed ([Get Docker](https://docs.docker.com/get-docker/))
+- **Docker Compose** installed (usually comes with Docker)
 
-### Step 3: Start the Application
-```bash
-./start.sh
-```
+### Recommended
+- **NVIDIA GPU** with CUDA 11.8+ drivers
+- **16GB+ RAM**
+- **50GB+ free disk space**
 
-Or start components separately:
-```bash
-# Terminal 1 - Backend
-./start_backend.sh
-
-# Terminal 2 - Frontend
-./start_frontend.sh
-```
-
-### Step 4: Open in Browser
-Navigate to: **http://localhost:3000**
-
----
-
-## 📊 What You Can Do
-
-### 1. Train Models from Scratch
-- Custom neural networks
-- ResNet architectures
-- Transformer models
-- Fully configurable layers and hyperparameters
-
-### 2. Fine-tune Pre-trained Models
-- **PyTorch**: ResNet18/50, VGG16, DenseNet121
-- **Hugging Face**: BERT, GPT-2, T5, LLaMA
-- Transfer learning with layer freezing
-- Adaptive learning rates
-
-### 3. Monitor Training
-- Real-time job status
-- Training logs and metrics
-- GPU utilization tracking
-- Job queue management
-
----
-
-## 🎯 Quick Training Examples
-
-### Example 1: Train a Simple Classifier
-```json
-{
-  "name": "My First Model",
-  "type": "train",
-  "framework": "pytorch",
-  "config": {
-    "epochs": 10,
-    "batch_size": 32,
-    "learning_rate": 0.001,
-    "num_classes": 10
-  }
-}
-```
-
-### Example 2: Fine-tune BERT
-```json
-{
-  "name": "BERT Fine-tune",
-  "type": "finetune",
-  "framework": "huggingface",
-  "config": {
-    "model_name": "bert-base-uncased",
-    "epochs": 3,
-    "batch_size": 16,
-    "learning_rate": 2e-5,
-    "num_classes": 2
-  }
-}
-```
-
----
-
-## 🗂️ Project Structure
-
-```
-dgx-ai-trainer/
-├── backend/              # Flask API
-│   ├── app.py           # Main server
-│   └── requirements.txt # Python deps
-├── frontend/            # React UI
-│   ├── src/
-│   │   └── App.jsx     # Main component
-│   └── package.json
-├── training_scripts/    # Training code
-│   ├── train_pytorch.py
-│   ├── finetune_pytorch.py
-│   └── train_huggingface.py
-├── jobs/                # Job metadata
-├── models/              # Saved models
-├── logs/                # Training logs
-└── setup.sh            # Setup script
-```
-
----
-
-## 💡 Key Features
-
-✅ **Multi-Framework Support**: PyTorch, TensorFlow, Hugging Face
-✅ **Real-time Monitoring**: Track jobs and GPU usage
-✅ **Job Queue System**: Automatic scheduling
-✅ **Model Management**: Save and organize trained models
-✅ **Web Interface**: Easy-to-use React dashboard
-✅ **RESTful API**: Programmatic access
-✅ **DGX Optimized**: Built for NVIDIA DGX Spark
-
----
-
-## 🔧 Configuration Options
-
-### Training Parameters
-- **epochs**: Number of training iterations
-- **batch_size**: Samples per gradient update
-- **learning_rate**: Optimization step size
-- **optimizer**: adam, sgd, adamw
-- **architecture**: Model structure
-
-### Fine-tuning Options
-- **model_name**: Base model to fine-tune
-- **freeze_layers**: Freeze pre-trained layers
-- **use_scheduler**: Learning rate scheduling
-- **weight_decay**: L2 regularization
-
----
-
-## 📈 Monitoring Your Jobs
-
-### Dashboard View
-- Total GPUs available
-- Running jobs count
-- Queued jobs
-- Saved models
-- GPU memory usage
-
-### Job Details
-- Status: queued → running → completed
-- Configuration
-- Real-time logs
-- Training metrics
-- Cancel option
-
----
-
-## 🐳 Docker Deployment (Optional)
-
-For containerized deployment:
+### Verify Your Setup
 
 ```bash
-# Build and start containers
+# Check Docker
+docker --version
+docker-compose --version
+
+# Check NVIDIA GPU (if you have one)
+nvidia-smi
+```
+
+Expected output for nvidia-smi:
+```
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 525.xx.xx    Driver Version: 525.xx.xx    CUDA Version: 12.x   |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+...
+```
+
+> **Don't have a GPU?** No problem! SparkTrainer works on CPU too (just slower for training).
+
+---
+
+## Step 1: Get SparkTrainer (30 seconds)
+
+```bash
+# Clone the repository
+git clone https://github.com/def1ant1/SparkTrainer.git
+cd SparkTrainer
+```
+
+---
+
+## Step 2: Start SparkTrainer (2 minutes)
+
+### Option A: One Command (Easiest!)
+
+```bash
+# Start everything with Docker Compose
 docker-compose up -d
 
-# View logs
-docker-compose logs -f
+# Wait for services to start (about 60 seconds)
+# You'll see: Creating sparktrainer_postgres_1 ... done
+#            Creating sparktrainer_redis_1    ... done
+#            Creating sparktrainer_mlflow_1   ... done
+#            Creating sparktrainer_backend_1  ... done
+#            Creating sparktrainer_frontend_1 ... done
 
-# Stop services
-docker-compose down
+# Initialize database with sample data
+docker-compose exec backend python init_db.py --sample-data
+
+# You're done! SparkTrainer is running!
 ```
 
-Access at: **http://localhost**
+### Option B: Step-by-Step (For Development)
 
----
+If you want to run services separately or modify code:
 
-## 🛠️ Customization
-
-### Add Your Own Data
-Edit training scripts in `training_scripts/`:
-```python
-# Replace dummy data with your dataset
-dataset = YourCustomDataset('/path/to/data')
-train_loader = DataLoader(dataset, batch_size=batch_size)
-```
-
-### Add Custom Architectures
-Extend model classes in training scripts:
-```python
-class MyCustomModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        # Your architecture here
-```
-
-### Add New Frameworks
-Create new training script:
 ```bash
-cp training_scripts/train_pytorch.py training_scripts/train_myframework.py
-# Modify for your framework
-```
+# 1. Start infrastructure (PostgreSQL, Redis, MLflow)
+docker-compose up -d postgres redis mlflow
 
----
-
-## 🔍 Troubleshooting
-
-### Port Already in Use
-```bash
-# Kill process on port 5000
-sudo lsof -t -i:5000 | xargs kill -9
-
-# Kill process on port 3000
-sudo lsof -t -i:3000 | xargs kill -9
-```
-
-### CUDA Out of Memory
-- Reduce batch_size
-- Enable mixed precision
-- Use gradient accumulation
-
-### Module Not Found
-```bash
+# 2. Set up Python backend
 cd backend
-source venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-### Frontend Won't Start
-```bash
-cd frontend
-rm -rf node_modules
+# 3. Initialize database
+python init_db.py --sample-data
+
+# 4. Start backend (Terminal 1)
+python app.py
+
+# 5. Start worker for training jobs (Terminal 2)
+celery -A celery_app.celery worker --loglevel=info --pool=solo
+
+# 6. Start frontend (Terminal 3)
+cd ../frontend
 npm install
+npm run dev
 ```
 
 ---
 
-## 📚 Additional Resources
+## Step 3: Access SparkTrainer (10 seconds)
 
-- **README.md**: Comprehensive documentation
-- **EXAMPLES.md**: Training configuration examples
-- **API Docs**: Backend API reference
-- **logs/**: Check training logs for errors
+Open your browser and go to:
 
----
+### 🎨 Main Application
+**http://localhost:3000**
 
-## 🎓 Best Practices
+You should see the SparkTrainer dashboard!
 
-1. **Start Small**: Test with small models first
-2. **Monitor GPUs**: Use `nvidia-smi` to check utilization
-3. **Save Checkpoints**: Models auto-save after training
-4. **Use Validation**: Split your data properly
-5. **Track Experiments**: Name jobs clearly
+### Other Interfaces (Optional)
+- 📊 **MLflow (Experiment Tracking)**: http://localhost:5001
+- 🌸 **Flower (Task Monitor)**: http://localhost:5555
+- 🔌 **Backend API**: http://localhost:5000/api/health
 
 ---
 
-## 📞 Support
+## Step 4: Train Your First Model (3 minutes)
 
-For issues:
-1. Check `logs/` directory for error messages
-2. Verify GPU availability: `nvidia-smi`
-3. Check backend logs: `tail -f logs/[job-id].log`
-4. Review training script output
+Now let's train a simple model to verify everything works!
+
+### In the Web Interface:
+
+1. **Go to Dashboard**
+   - You should see "Welcome to SparkTrainer" at the top
+   - Notice the "Create Job" button? Click it!
+
+2. **Training Wizard Opens - Step 1: Select Data**
+   - **Project**: Select "Demo Project" (created with sample data)
+   - **Dataset**: Select "Sample Dataset" (pre-loaded for you)
+   - Click **Next**
+
+3. **Step 2: Choose Model**
+   - Select **"From HuggingFace"**
+   - Model ID: Enter `distilbert-base-uncased` (a small, fast model)
+   - Click **Next**
+
+4. **Step 3: Pick Recipe**
+   - Select **"LoRA"** (efficient fine-tuning)
+   - Click **Next**
+
+5. **Step 4: Configure**
+   - **Epochs**: 1 (just to test!)
+   - **Batch Size**: 4
+   - **Learning Rate**: Use suggested value (2e-4)
+   - **LoRA Rank**: 8
+   - Click **Launch Training**
+
+6. **Watch It Train!**
+   - You'll be redirected to the Job Details page
+   - Watch real-time logs streaming
+   - See GPU/CPU utilization
+   - Training should complete in 1-3 minutes
+
+### Via Command Line (Alternative):
+
+```python
+# Save this as test_train.py
+from spark_trainer.recipes.lora_recipes import create_lora_recipe
+
+config = {
+    "base_model": "distilbert-base-uncased",
+    "dataset_name": "sample_dataset",
+    "lora_r": 8,
+    "lora_alpha": 16,
+    "learning_rate": 2e-4,
+    "num_epochs": 1,
+    "batch_size": 4,
+    "output_dir": "./test_model"
+}
+
+recipe = create_lora_recipe(config, use_qlora=False)
+recipe.run()
+
+print("🎉 Training complete! Model saved to ./test_model")
+```
+
+Run it:
+```bash
+python test_train.py
+```
 
 ---
 
-## 🚀 Next Steps
+## Step 5: Explore SparkTrainer (2 minutes)
 
-1. ✅ Complete setup
-2. ✅ Start the application
-3. ✅ Create your first training job
-4. ✅ Monitor training progress
-5. ✅ Use your trained model
+Now that you have a trained model, explore the interface:
 
-**Happy Training! 🎉**
+### Dashboard
+- View system metrics (GPU, memory, jobs)
+- See active and completed training jobs
+- Quick access to create new jobs
+
+### Jobs
+- List all training jobs
+- Click any job to see:
+  - Real-time logs
+  - Training metrics (loss, accuracy)
+  - GPU utilization
+  - Checkpoints
+
+### Datasets
+- View all datasets
+- Upload new data
+- See dataset statistics and samples
+
+### Models
+- Browse trained models
+- Download or export to HuggingFace
+- View model cards and metadata
+
+### Leaderboard
+- Compare model performance
+- See rankings across benchmarks
+- Filter by model type
+
+### Experiments
+- Track multiple training runs
+- Compare hyperparameters
+- Visualize metrics over time
+
+---
+
+## Common First Steps
+
+### Add Your Own Dataset
+
+**For Images:**
+```bash
+# Create dataset directory
+mkdir -p datasets/my_images/images
+
+# Copy your images
+cp /path/to/your/images/* datasets/my_images/images/
+
+# Create manifest (optional)
+echo '{"name": "my_images", "type": "image"}' > datasets/my_images/manifest.json
+```
+
+**For Text:**
+```bash
+# Create JSONL file
+cat > datasets/my_text/data.jsonl << EOF
+{"text": "First training example", "label": "positive"}
+{"text": "Second training example", "label": "negative"}
+EOF
+```
+
+Then refresh the Datasets page in the UI!
+
+### Train on Your Data
+
+1. Go to **Dashboard** → **Create Job**
+2. Select your new dataset
+3. Choose a model (try `bert-base-uncased` for text)
+4. Pick LoRA recipe
+5. Launch!
+
+### Monitor Training
+
+Real-time monitoring options:
+```bash
+# Option 1: Watch logs
+tail -f logs/job_*.log
+
+# Option 2: Use the Dashboard
+# Just click on your job in the Jobs page!
+
+# Option 3: Use MLflow
+# Open http://localhost:5001
+```
+
+### Export Your Model
+
+After training completes:
+
+**Via UI:**
+1. Go to **Models** page
+2. Click your model
+3. Click **Download** or **Export to HuggingFace**
+
+**Via CLI:**
+```bash
+# Find your model in the models/ directory
+ls models/
+
+# Use it with transformers
+python
+>>> from transformers import AutoModel
+>>> model = AutoModel.from_pretrained("./models/job_123")
+```
+
+---
+
+## Troubleshooting
+
+### Ports Already in Use
+
+If you see "port already allocated":
+
+```bash
+# Check what's using the port
+sudo lsof -i :5000  # Backend
+sudo lsof -i :3000  # Frontend
+
+# Kill the process or change ports in docker-compose.yml
+```
+
+### Docker Containers Won't Start
+
+```bash
+# Check container logs
+docker-compose logs backend
+docker-compose logs postgres
+docker-compose logs redis
+
+# Restart all services
+docker-compose down
+docker-compose up -d
+```
+
+### GPU Not Detected
+
+```bash
+# Verify NVIDIA Docker runtime
+docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
+
+# If that fails, install NVIDIA Container Toolkit:
+# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+```
+
+### Out of Memory (OOM) Errors
+
+If training fails with OOM:
+
+1. **Reduce batch size**: Try 2 or 1
+2. **Use QLoRA**: Enable 4-bit quantization
+3. **Enable gradient checkpointing**
+4. **Use a smaller model**: Try `distilbert` instead of `bert`
+
+### Training is Slow
+
+**On CPU?** Training is 10-100x slower without GPU.
+
+**Speed it up:**
+- Use a smaller model for testing
+- Reduce dataset size
+- Lower the number of epochs
+- Consider cloud GPU (AWS, GCP, Lambda Labs)
+
+### Database Connection Failed
+
+```bash
+# Restart PostgreSQL
+docker-compose restart postgres
+
+# Check if it's running
+docker-compose ps postgres
+
+# View logs
+docker-compose logs postgres
+```
+
+---
+
+## Next Steps
+
+Now that SparkTrainer is running, dive deeper:
+
+### Tutorials
+- 📖 **[Complete Tutorial](docs/TUTORIAL.md)**: Full walkthrough with real examples
+- 🎯 **[LoRA Guide](docs/app/recipes/lora.md)**: Master efficient fine-tuning
+- 👁️ **[Vision Models](docs/VISION_LANGUAGE.md)**: Train multimodal models
+- 📊 **[Datasets Guide](docs/DATASETS.md)**: Advanced data preparation
+
+### Documentation
+- 📘 **[Installation Guide](docs/INSTALLATION.md)**: Detailed setup instructions
+- 🛠️ **[Configuration](docs/CONFIGURATION.md)**: All settings explained
+- 🔌 **[API Reference](docs/api.md)**: REST API documentation
+- ❓ **[Troubleshooting](docs/TROUBLESHOOTING.md)**: Solve common issues
+
+### Community
+- 💬 **[GitHub Discussions](https://github.com/def1ant1/SparkTrainer/discussions)**: Ask questions
+- 🐛 **[Report Issues](https://github.com/def1ant1/SparkTrainer/issues)**: Found a bug?
+- 🤝 **[Contributing](CONTRIBUTING.md)**: Help improve SparkTrainer
+
+---
+
+## Quick Reference Commands
+
+### Start/Stop
+```bash
+# Start everything
+docker-compose up -d
+
+# Stop everything
+docker-compose down
+
+# Restart a service
+docker-compose restart backend
+
+# View logs
+docker-compose logs -f backend
+```
+
+### Database
+```bash
+# Reset database
+docker-compose exec backend python init_db.py --reset --sample-data
+
+# Backup database
+docker-compose exec postgres pg_dump -U sparktrainer sparktrainer > backup.sql
+
+# Restore database
+cat backup.sql | docker-compose exec -T postgres psql -U sparktrainer sparktrainer
+```
+
+### Training
+```bash
+# List all jobs
+curl http://localhost:5000/api/jobs
+
+# Get job details
+curl http://localhost:5000/api/jobs/123
+
+# Cancel a job
+curl -X POST http://localhost:5000/api/jobs/123/cancel
+```
+
+---
+
+## Success! 🎉
+
+You've successfully:
+- ✅ Installed SparkTrainer
+- ✅ Started all services
+- ✅ Trained your first model
+- ✅ Explored the interface
+
+**You're ready to build amazing AI models!**
+
+Need help? Check the [full documentation](README.md) or [ask the community](https://github.com/def1ant1/SparkTrainer/discussions).
+
+Happy training! 🚀
