@@ -59,8 +59,11 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainers responsible for enforcement at
-[INSERT CONTACT METHOD].
+reported to the project maintainers responsible for enforcement at:
+
+**[GitHub Issues](https://github.com/def1ant1/SparkTrainer/issues)** (for public concerns)
+
+or via direct message to project maintainers (for sensitive matters).
 
 All complaints will be reviewed and investigated promptly and fairly.
 

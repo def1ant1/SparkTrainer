@@ -50,6 +50,35 @@ setup(
         "console_scripts": [
             "spark-trainer=spark_trainer.cli:main",
         ],
+        # Plugin system for custom recipes
+        "spark_trainer.recipes": [
+            "lora = spark_trainer.recipes.lora_recipes:LoRARecipe",
+            "lora_qlora = spark_trainer.recipes.lora_recipes:QLoRARecipe",
+            "vision = spark_trainer.recipes.vision_recipes:VisionRecipe",
+            "text = spark_trainer.recipes.text_recipes:TextRecipe",
+            "audio = spark_trainer.recipes.audio_video_recipes:AudioRecipe",
+            "video = spark_trainer.recipes.audio_video_recipes:VideoRecipe",
+            "distillation = spark_trainer.recipes.distillation:DistillationRecipe",
+        ],
+        # Plugin system for custom benchmarks
+        "spark_trainer.benchmarks": [
+            "mmlu = spark_trainer.evaluation.mmlu_benchmark:MMLUBenchmark",
+            "coco = spark_trainer.evaluation.coco_benchmark:COCOBenchmark",
+        ],
+        # Plugin system for quality gates
+        "spark_trainer.quality_gates": [
+            "dedupe = spark_trainer.ingestion.quality_gates:DeduplicationGate",
+            "pii = spark_trainer.ingestion.quality_gates:PIIRedactionGate",
+            "toxicity = spark_trainer.ingestion.quality_gates:ToxicityGate",
+            "nsfw = spark_trainer.ingestion.quality_gates:NSFWGate",
+        ],
+        # Plugin system for inference adapters
+        "spark_trainer.inference": [
+            "vllm = spark_trainer.inference.vllm_adapter:VLLMAdapter",
+            "tgi = spark_trainer.inference.tgi_adapter:TGIAdapter",
+            "triton = spark_trainer.inference.triton_adapter:TritonAdapter",
+            "torchserve = spark_trainer.inference.torchserve_adapter:TorchServeAdapter",
+        ],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",

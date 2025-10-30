@@ -762,6 +762,466 @@ make format
 
 See the [Makefile](Makefile) for all available development commands.
 
+## 🔧 Troubleshooting
+
+This section covers common issues and their solutions. If you don't find your issue here, check our [GitHub Discussions](https://github.com/def1ant1/SparkTrainer/discussions) or open an issue.
+
+### GPU Memory Errors
+
+**Problem**: `CUDA out of memory` or `RuntimeError: CUDA error: out of memory`
+
+**Solutions**:
+
+1. **Reduce Batch Size**:
+   ```json
+   {
+     "hyperparameters": {
+       "batch_size": 2,  // Try 1, 2, or 4
+       "gradient_accumulation_steps": 8  // Increase to maintain effective batch size
+     }
+   }
+   ```
+
+2. **Enable Gradient Checkpointing**:
+   ```json
+   {
+     "hyperparameters": {
+       "gradient_checkpointing": true
+     }
+   }
+   ```
+
+3. **Use Quantization** (QLoRA):
+   ```json
+   {
+     "recipe": "lora_qlora",  // Uses 4-bit quantization
+     "hyperparameters": {
+       "load_in_4bit": true
+     }
+   }
+   ```
+
+4. **Reduce Sequence Length**:
+   ```json
+   {
+     "hyperparameters": {
+       "max_length": 1024  // Instead of 2048 or 4096
+     }
+   }
+   ```
+
+5. **Monitor GPU Memory**:
+   ```bash
+   # Check GPU memory usage
+   nvidia-smi
+
+   # Watch GPU memory in real-time
+   watch -n 1 nvidia-smi
+   ```
+
+6. **Clear GPU Cache** (in training script):
+   ```python
+   import torch
+   torch.cuda.empty_cache()
+   ```
+
+### Whisper Transcription Failures
+
+**Problem**: Whisper fails to transcribe audio or produces garbled output
+
+**Solutions**:
+
+1. **Check Audio Format**:
+   - Whisper works best with 16kHz sampling rate
+   - Ensure audio is properly extracted from video
+   ```bash
+   # Convert audio to correct format
+   ffmpeg -i input.mp4 -ar 16000 -ac 1 output.wav
+   ```
+
+2. **Use Appropriate Whisper Model**:
+   - `tiny`: Fast but less accurate (39M params)
+   - `base`: Good balance (74M params) - **Recommended for most use cases**
+   - `small`: Better accuracy (244M params)
+   - `medium`: High accuracy (769M params)
+   - `large`: Best accuracy but slow (1550M params)
+
+3. **Adjust Whisper Configuration**:
+   ```json
+   {
+     "video_config": {
+       "transcription": {
+         "model": "base",  // Try "small" or "medium" for better quality
+         "language": "en",  // Specify language for better results
+         "fp16": false  // Disable FP16 if encountering NaN issues
+       }
+     }
+   }
+   ```
+
+4. **Handle Long Audio**:
+   - Whisper works best on chunks < 30 seconds
+   - SparkTrainer automatically chunks audio, but you can adjust:
+   ```json
+   {
+     "video_config": {
+       "transcription": {
+         "chunk_length_s": 30
+       }
+     }
+   }
+   ```
+
+5. **Check Logs**:
+   ```bash
+   docker-compose logs celery-worker | grep -i whisper
+   ```
+
+### Dataset Loading Issues
+
+**Problem**: Dataset fails to load or process
+
+**Solutions**:
+
+1. **Check Dataset Format**:
+   - SparkTrainer expects JSONL manifest format
+   - Each line should be valid JSON
+   ```bash
+   # Validate JSONL format
+   cat dataset.jsonl | jq . > /dev/null
+   ```
+
+2. **Verify File Paths**:
+   ```bash
+   # Ensure paths in manifest are accessible
+   ls -lh datasets/my-dataset/
+   ```
+
+3. **Check Disk Space**:
+   ```bash
+   df -h
+   ```
+
+4. **Inspect Dataset Samples**:
+   ```bash
+   # View first few samples
+   head -n 5 datasets/my-dataset/manifest.jsonl | jq .
+   ```
+
+5. **Dataset Size Limits**:
+   - For very large datasets (>1M samples), consider:
+     - Splitting into smaller batches
+     - Using streaming datasets
+     - Increasing worker timeout
+
+### Connection Refused / Cannot Connect to Backend
+
+**Problem**: Frontend cannot connect to backend API
+
+**Solutions**:
+
+1. **Check Services are Running**:
+   ```bash
+   docker-compose ps
+
+   # All services should show "Up"
+   ```
+
+2. **Check Logs**:
+   ```bash
+   # Backend logs
+   docker-compose logs backend
+
+   # Database logs
+   docker-compose logs postgres
+   ```
+
+3. **Verify Port Mappings**:
+   - Frontend: `http://localhost:3000`
+   - Backend: `http://localhost:5000`
+   - MLflow: `http://localhost:5001`
+   - Flower: `http://localhost:5555`
+
+4. **Restart Services**:
+   ```bash
+   docker-compose down
+   docker-compose up -d
+   ```
+
+5. **Check Network**:
+   ```bash
+   # Test backend connectivity
+   curl http://localhost:5000/api/health
+
+   # Should return: {"status": "healthy"}
+   ```
+
+### Training Job Stuck in "Queued" Status
+
+**Problem**: Jobs remain in "queued" state and never start
+
+**Solutions**:
+
+1. **Check Celery Workers**:
+   ```bash
+   # View worker status
+   docker-compose logs celery-worker
+
+   # Check Flower dashboard
+   open http://localhost:5555
+   ```
+
+2. **Verify Redis Connection**:
+   ```bash
+   docker-compose logs redis
+   ```
+
+3. **Restart Workers**:
+   ```bash
+   docker-compose restart celery-worker
+   ```
+
+4. **Check Queue Depth**:
+   - Visit Flower UI: `http://localhost:5555`
+   - Look for backed-up queues
+
+5. **Resource Availability**:
+   - Ensure GPUs are available
+   - Check if other jobs are consuming all resources
+   ```bash
+   nvidia-smi
+   ```
+
+### MLflow Tracking Not Working
+
+**Problem**: Experiments not appearing in MLflow or metrics not logging
+
+**Solutions**:
+
+1. **Check MLflow Service**:
+   ```bash
+   docker-compose logs mlflow
+
+   # Access MLflow UI
+   open http://localhost:5001
+   ```
+
+2. **Verify Environment Variables**:
+   ```bash
+   # In backend container
+   docker-compose exec backend env | grep MLFLOW
+
+   # Should show:
+   # MLFLOW_TRACKING_URI=http://mlflow:5000
+   ```
+
+3. **Check Storage**:
+   ```bash
+   # Verify MLflow artifacts directory
+   ls -lh mlflow_artifacts/
+   ```
+
+4. **Manually Test MLflow**:
+   ```python
+   import mlflow
+
+   mlflow.set_tracking_uri("http://localhost:5001")
+
+   with mlflow.start_run():
+       mlflow.log_param("test", "value")
+   ```
+
+### Database Migration Errors
+
+**Problem**: Alembic migration fails or database schema is incorrect
+
+**Solutions**:
+
+1. **Check Current Migration**:
+   ```bash
+   docker-compose exec backend alembic current
+   ```
+
+2. **Run Migrations**:
+   ```bash
+   docker-compose exec backend alembic upgrade head
+   ```
+
+3. **Reset Database** (⚠️ destroys all data):
+   ```bash
+   docker-compose down -v
+   docker-compose up -d
+   ```
+
+4. **Check Migration History**:
+   ```bash
+   docker-compose exec backend alembic history
+   ```
+
+### Container Startup Failures
+
+**Problem**: Docker containers fail to start or crash immediately
+
+**Solutions**:
+
+1. **Check Logs**:
+   ```bash
+   docker-compose logs --tail=100
+   ```
+
+2. **Verify Docker Resources**:
+   - Ensure Docker has sufficient memory (8GB+ recommended)
+   - Check Docker Desktop settings
+
+3. **Clean Docker Environment**:
+   ```bash
+   # Remove all stopped containers
+   docker-compose down
+
+   # Remove volumes (⚠️ destroys data)
+   docker-compose down -v
+
+   # Rebuild images
+   docker-compose build --no-cache
+   docker-compose up -d
+   ```
+
+4. **Check Port Conflicts**:
+   ```bash
+   # Check if ports are already in use
+   lsof -i :5000  # Backend
+   lsof -i :3000  # Frontend
+   lsof -i :5001  # MLflow
+   ```
+
+### Model Download Failures
+
+**Problem**: Cannot download models from Hugging Face Hub
+
+**Solutions**:
+
+1. **Check Internet Connection**:
+   ```bash
+   ping huggingface.co
+   ```
+
+2. **Authenticate with Hugging Face**:
+   ```bash
+   # Set HF token in environment
+   export HF_TOKEN="your_token_here"
+
+   # Or in docker-compose.yml
+   environment:
+     - HF_TOKEN=${HF_TOKEN}
+   ```
+
+3. **Use Model Cache**:
+   - Models are cached in `~/.cache/huggingface/`
+   - Mount this directory to avoid re-downloading:
+   ```yaml
+   volumes:
+     - ~/.cache/huggingface:/root/.cache/huggingface
+   ```
+
+4. **Check Model Availability**:
+   - Verify model exists on HuggingFace Hub
+   - Check if model requires authentication
+   - Ensure model license allows usage
+
+### Performance Issues / Slow Training
+
+**Problem**: Training is slower than expected
+
+**Solutions**:
+
+1. **Enable Mixed Precision**:
+   ```json
+   {
+     "hyperparameters": {
+       "fp16": true  // Or "bf16": true for newer GPUs
+     }
+   }
+   ```
+
+2. **Optimize Data Loading**:
+   ```json
+   {
+     "hyperparameters": {
+       "dataloader_num_workers": 4,
+       "dataloader_pin_memory": true
+     }
+   }
+   ```
+
+3. **Use Distributed Training**:
+   ```json
+   {
+     "resources": {
+       "gpu_count": 4,
+       "distributed_backend": "nccl"
+     }
+   }
+   ```
+
+4. **Profile GPU Utilization**:
+   ```bash
+   # Monitor GPU usage
+   nvidia-smi dmon -i 0
+
+   # Should show high GPU utilization (>80%)
+   ```
+
+5. **Check Bottlenecks**:
+   - CPU: Increase dataloader workers
+   - GPU: Increase batch size
+   - I/O: Use faster storage (NVMe SSD)
+   - Network: Use local dataset cache
+
+### Cannot Access Web UI
+
+**Problem**: Web interface not loading or showing blank page
+
+**Solutions**:
+
+1. **Check Frontend Logs**:
+   ```bash
+   docker-compose logs frontend
+   ```
+
+2. **Verify Backend Connection**:
+   - Open browser DevTools (F12)
+   - Check Console for errors
+   - Check Network tab for failed API calls
+
+3. **Clear Browser Cache**:
+   - Hard refresh: `Ctrl+Shift+R` (Windows/Linux) or `Cmd+Shift+R` (Mac)
+   - Clear browser cache and cookies
+
+4. **Check CORS Settings**:
+   ```bash
+   # In backend logs, look for CORS errors
+   docker-compose logs backend | grep -i cors
+   ```
+
+### Getting Help
+
+If you're still experiencing issues:
+
+1. **Search Existing Issues**: [GitHub Issues](https://github.com/def1ant1/SparkTrainer/issues)
+2. **Ask the Community**: [GitHub Discussions](https://github.com/def1ant1/SparkTrainer/discussions)
+3. **Open a Bug Report**: Use the [Bug Report Template](https://github.com/def1ant1/SparkTrainer/issues/new?template=bug_report.md)
+4. **Check Documentation**:
+   - [Quick Start Guide](QUICKSTART.md)
+   - [Developer Guide](DEVELOPER_GUIDE.md)
+   - [API Documentation](http://localhost:5000/api/docs)
+
+When reporting issues, please include:
+- SparkTrainer version
+- Docker version
+- GPU model and driver version
+- Relevant logs
+- Steps to reproduce
+
 ## 🤝 Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
