@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 
 from database import get_db_session
-from models import BaseModel, Recipe, Adapter, Experiment, Dataset, Project
+from models import BaseModel, Recipe, Adapter, Experiment, Dataset, Project, Activity
 from compatibility_engine import CompatibilityEngine
 from smart_defaults import SmartDefaults
 
@@ -31,7 +31,12 @@ def base_models():
             modality = request.args.get('modality')
             stage = request.args.get('stage')
             trainable = request.args.get('trainable')
+            servable = request.args.get('servable')
             search = request.args.get('search')
+            q = request.args.get('q')  # Alias for search
+            project_id = request.args.get('project')
+            limit = request.args.get('limit', type=int)
+            offset = request.args.get('offset', type=int, default=0)
 
             query = session.query(BaseModel)
 
@@ -45,21 +50,37 @@ def base_models():
             if trainable is not None:
                 trainable_bool = trainable.lower() == 'true'
                 query = query.filter(BaseModel.trainable == trainable_bool)
-            if search:
-                search_pattern = f"%{search}%"
+            if servable is not None:
+                servable_bool = servable.lower() == 'true'
+                query = query.filter(BaseModel.servable == servable_bool)
+
+            # Search filter
+            search_term = search or q
+            if search_term:
+                search_pattern = f"%{search_term}%"
                 query = query.filter(
                     (BaseModel.name.ilike(search_pattern)) |
-                    (BaseModel.description.ilike(search_pattern))
+                    (BaseModel.description.ilike(search_pattern)) |
+                    (BaseModel.family.ilike(search_pattern))
                 )
 
-            # Order by params desc (largest first)
-            query = query.order_by(BaseModel.params_b.desc())
+            # Order by params desc (largest first), then by name
+            query = query.order_by(BaseModel.params_b.desc(), BaseModel.name)
+
+            # Count total before pagination
+            total = query.count()
+
+            # Apply pagination
+            if limit:
+                query = query.limit(limit).offset(offset)
 
             models = query.all()
 
             return jsonify({
                 'models': [_serialize_base_model(m) for m in models],
-                'total': len(models)
+                'total': total,
+                'limit': limit,
+                'offset': offset
             }), 200
 
         elif request.method == 'POST':
@@ -348,6 +369,108 @@ def adapter_detail(adapter_id):
 
 
 # ============================================================================
+# Datasets API with Compatibility
+# ============================================================================
+
+@experiment_bp.route('/api/datasets', methods=['GET'])
+def list_datasets():
+    """
+    List datasets with optional filtering and compatibility checking.
+
+    Query parameters:
+        - project: Filter by project ID
+        - modality: Filter by modality (text, image, audio, video, multimodal)
+        - compatible_with_model: Filter to only show datasets compatible with given model ID
+        - search or q: Search query
+        - limit: Pagination limit
+        - offset: Pagination offset
+    """
+    session = get_db_session()
+
+    try:
+        project_id = request.args.get('project')
+        modality = request.args.get('modality')
+        compatible_with_model = request.args.get('compatible_with_model')
+        search = request.args.get('search') or request.args.get('q')
+        limit = request.args.get('limit', type=int)
+        offset = request.args.get('offset', type=int, default=0)
+
+        query = session.query(Dataset)
+
+        # Apply basic filters
+        if project_id:
+            query = query.filter(Dataset.project_id == project_id)
+        if modality:
+            query = query.filter(Dataset.modality == modality)
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(
+                (Dataset.name.ilike(search_pattern)) |
+                (Dataset.description.ilike(search_pattern))
+            )
+
+        # Apply model compatibility filter
+        if compatible_with_model:
+            base_model = session.query(BaseModel).filter(
+                BaseModel.id == compatible_with_model
+            ).first()
+
+            if base_model:
+                model_modality = base_model.modality
+                # Get compatible modalities
+                from compatibility_engine import CompatibilityEngine
+                compat_modalities = CompatibilityEngine.MODALITY_COMPAT.get(model_modality, [])
+
+                # Filter datasets to compatible modalities
+                query = query.filter(Dataset.modality.in_(compat_modalities))
+
+        # Order by creation date (newest first)
+        query = query.order_by(Dataset.created_at.desc())
+
+        # Count total before pagination
+        total = query.count()
+
+        # Apply pagination
+        if limit:
+            query = query.limit(limit).offset(offset)
+
+        datasets = query.all()
+
+        # Build response with compatibility info if model specified
+        dataset_list = []
+        for ds in datasets:
+            ds_dict = _serialize_dataset(ds)
+
+            # Add compatibility status if model specified
+            if compatible_with_model and base_model:
+                _, warnings, errors = CompatibilityEngine.check_compatibility(
+                    _serialize_base_model(base_model),
+                    ds_dict,
+                    None,
+                    None
+                )
+                ds_dict['compatibility'] = {
+                    'compatible': len(errors) == 0,
+                    'warnings': warnings,
+                    'errors': errors
+                }
+
+            dataset_list.append(ds_dict)
+
+        return jsonify({
+            'datasets': dataset_list,
+            'total': total,
+            'limit': limit,
+            'offset': offset
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+# ============================================================================
 # Experiment Preflight & Smart Defaults
 # ============================================================================
 
@@ -487,6 +610,148 @@ def experiment_smart_defaults():
 
 
 # ============================================================================
+# Activity Feed API
+# ============================================================================
+
+@experiment_bp.route('/api/activity', methods=['GET', 'POST'])
+def activity_feed():
+    """
+    Get activity feed or create new activity event.
+
+    GET query parameters:
+        - limit: Number of items to return (default 100)
+        - offset: Pagination offset
+        - event_type: Filter by event type
+        - entity_type: Filter by entity type
+        - user_id: Filter by user
+        - project_id: Filter by project
+        - unread_only: Show only unread items (true/false)
+    """
+    session = get_db_session()
+
+    try:
+        if request.method == 'GET':
+            limit = request.args.get('limit', type=int, default=100)
+            offset = request.args.get('offset', type=int, default=0)
+            event_type = request.args.get('event_type')
+            entity_type = request.args.get('entity_type')
+            user_id = request.args.get('user_id')
+            project_id = request.args.get('project_id')
+            unread_only = request.args.get('unread_only', 'false').lower() == 'true'
+
+            query = session.query(Activity)
+
+            # Apply filters
+            if event_type:
+                query = query.filter(Activity.event_type == event_type)
+            if entity_type:
+                query = query.filter(Activity.entity_type == entity_type)
+            if user_id:
+                query = query.filter(Activity.user_id == user_id)
+            if project_id:
+                query = query.filter(Activity.project_id == project_id)
+            if unread_only:
+                query = query.filter(Activity.read == False)
+
+            # Order by creation date (newest first)
+            query = query.order_by(Activity.created_at.desc())
+
+            # Count total
+            total = query.count()
+
+            # Apply pagination
+            query = query.limit(limit).offset(offset)
+
+            activities = query.all()
+
+            return jsonify({
+                'activities': [_serialize_activity(a) for a in activities],
+                'total': total,
+                'limit': limit,
+                'offset': offset
+            }), 200
+
+        elif request.method == 'POST':
+            data = request.json
+
+            activity = Activity(
+                id=str(uuid.uuid4()),
+                event_type=data['event_type'],
+                entity_type=data['entity_type'],
+                entity_id=data.get('entity_id'),
+                title=data['title'],
+                message=data.get('message'),
+                status=data.get('status'),
+                user_id=data.get('user_id'),
+                project_id=data.get('project_id'),
+                metadata=data.get('metadata', {}),
+                read=data.get('read', False),
+            )
+
+            session.add(activity)
+            session.commit()
+
+            return jsonify(_serialize_activity(activity)), 201
+
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+@experiment_bp.route('/api/activity/<activity_id>/mark-read', methods=['POST'])
+def mark_activity_read(activity_id):
+    """Mark an activity as read."""
+    session = get_db_session()
+
+    try:
+        activity = session.query(Activity).filter(Activity.id == activity_id).first()
+        if not activity:
+            return jsonify({'error': 'Activity not found'}), 404
+
+        activity.read = True
+        session.commit()
+
+        return jsonify(_serialize_activity(activity)), 200
+
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+@experiment_bp.route('/api/activity/mark-all-read', methods=['POST'])
+def mark_all_activities_read():
+    """Mark all activities as read for a user/project."""
+    session = get_db_session()
+
+    try:
+        data = request.json or {}
+        user_id = data.get('user_id')
+        project_id = data.get('project_id')
+
+        query = session.query(Activity).filter(Activity.read == False)
+
+        if user_id:
+            query = query.filter(Activity.user_id == user_id)
+        if project_id:
+            query = query.filter(Activity.project_id == project_id)
+
+        updated_count = query.update({'read': True})
+        session.commit()
+
+        return jsonify({'marked_read': updated_count}), 200
+
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
 
@@ -609,4 +874,25 @@ def _serialize_dataset(dataset: Dataset) -> Dict:
         'metadata': dataset.metadata,
         'created_at': dataset.created_at.isoformat() if dataset.created_at else None,
         'updated_at': dataset.updated_at.isoformat() if dataset.updated_at else None,
+    }
+
+
+def _serialize_activity(activity: Activity) -> Dict:
+    """Serialize an Activity to a dict."""
+    if not activity:
+        return None
+
+    return {
+        'id': activity.id,
+        'event_type': activity.event_type,
+        'entity_type': activity.entity_type,
+        'entity_id': activity.entity_id,
+        'title': activity.title,
+        'message': activity.message,
+        'status': activity.status,
+        'user_id': activity.user_id,
+        'project_id': activity.project_id,
+        'metadata': activity.metadata,
+        'read': activity.read,
+        'created_at': activity.created_at.isoformat() if activity.created_at else None,
     }

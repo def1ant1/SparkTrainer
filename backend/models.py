@@ -719,6 +719,45 @@ class LeaderboardEntry(Base):
     )
 
 
+class Activity(Base):
+    """Activity feed for tracking events across the system."""
+    __tablename__ = "activities"
+
+    id = Column(String(36), primary_key=True)
+
+    # Event type
+    event_type = Column(String(50), nullable=False)  # job_created, job_completed, job_failed, transfer_completed, etc.
+    entity_type = Column(String(50), nullable=False)  # job, transfer, experiment, dataset, model
+    entity_id = Column(String(36), nullable=True)
+
+    # Event details
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=True)
+    status = Column(String(20), nullable=True)  # success, error, info, warning
+
+    # Context
+    user_id = Column(String(36), nullable=True)
+    project_id = Column(String(36), nullable=True)
+
+    # Metadata
+    metadata = Column(JSON, default={})
+
+    # Read status (for notification management)
+    read = Column(Boolean, default=False)
+
+    # Timestamp
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_activity_type", "event_type"),
+        Index("idx_activity_entity", "entity_type", "entity_id"),
+        Index("idx_activity_user", "user_id"),
+        Index("idx_activity_project", "project_id"),
+        Index("idx_activity_created", "created_at"),
+        Index("idx_activity_read", "read"),
+    )
+
+
 # Event listeners for automatic timestamp updates
 @event.listens_for(Project, 'before_update')
 @event.listens_for(Dataset, 'before_update')
