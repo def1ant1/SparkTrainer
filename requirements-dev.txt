@@ -1,0 +1,42 @@
+# Development dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Testing
+pytest>=7.3.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+pytest-asyncio>=0.21.0
+
+# Code quality
+black>=23.3.0
+isort>=5.12.0
+flake8>=6.0.0
+mypy>=1.4.0
+bandit>=1.7.5
+
+# Pre-commit hooks
+pre-commit>=3.3.0
+
+# Documentation
+sphinx>=7.0.0
+sphinx-rtd-theme>=1.2.0
+myst-parser>=2.0.0
+
+# Security scanning
+safety>=2.3.0
+pip-audit>=2.6.0
+
+# Dependencies management
+pip-tools>=7.0.0
+
+# Type stubs
+types-requests>=2.31.0
+types-PyYAML>=6.0.12
+
+# Debugging
+ipython>=8.14.0
+ipdb>=0.13.13
+
+# Performance profiling
+memory-profiler>=0.61.0
+line-profiler>=4.0.0

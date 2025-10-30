@@ -113,7 +113,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           TESTING: 'true'
         run: |
-          pytest tests/ --cov=src --cov=backend --cov-report=xml --cov-report=html --cov-report=term
+          pytest tests/ --cov=src --cov=backend --cov-report=xml --cov-report=html --cov-report=term --cov-fail-under=80
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -311,6 +311,39 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install safety pip-audit
+          pip install -r requirements.txt || true
+          pip install -r backend/requirements.txt || true
+
+      - name: Run Safety check
+        run: |
+          safety check --json --output safety-report.json || true
+          safety check || echo "Safety check found vulnerabilities"
+        continue-on-error: true
+
+      - name: Run pip-audit
+        run: |
+          pip-audit --format json --output pip-audit-report.json || true
+          pip-audit || echo "pip-audit found vulnerabilities"
+        continue-on-error: true
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            safety-report.json
+            pip-audit-report.json
+        continue-on-error: true
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master

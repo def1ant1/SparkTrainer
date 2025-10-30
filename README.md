@@ -7,6 +7,9 @@ SparkTrainer is an enterprise-grade machine learning training platform that comb
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://www.docker.com/)
+[![CI/CD](https://github.com/def1ant1/SparkTrainer/actions/workflows/ci.yml/badge.svg)](https://github.com/def1ant1/SparkTrainer/actions/workflows/ci.yml)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
 ## 🆕 Latest MLOps Enhancements
 
@@ -283,34 +286,51 @@ See `configs/` directory for examples:
 
 ## 📚 Documentation
 
+- **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)**: Developer setup and architecture guide
+- **[CONTRIBUTING.md](CONTRIBUTING.md)**: How to contribute to SparkTrainer
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**: Community guidelines
 - **[FEATURES.md](FEATURES.md)**: Comprehensive feature documentation
-- **[API Documentation](docs/api.md)**: REST API reference
+- **[API Documentation](docs/)**: Complete API reference (Sphinx)
 - **[Recipe Guide](docs/recipes.md)**: Creating custom recipes
 - **[Deployment Guide](docs/deployment.md)**: Production deployment
 
 ## 🧪 Testing
 
 ```bash
-# Run all tests
-pytest
+# Run all tests with coverage (requires 80% coverage)
+make test
 
-# With coverage
-pytest --cov=src/spark_trainer --cov-report=html
+# Quick test without coverage
+make test-quick
 
-# Specific test
+# Run specific test
 pytest tests/test_lora_recipes.py
+
+# Run linting
+make lint
+
+# Format code
+make format
 ```
+
+See the [Makefile](Makefile) for all available development commands.
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 **Ways to contribute**:
-- Add new recipes
+- Add new recipes (use the Recipe Submission issue template)
 - Implement evaluation benchmarks
 - Improve documentation
-- Report bugs
-- Request features
+- Report bugs (use the Bug Report template)
+- Request features (use the Feature Request template)
+
+**Getting Started**:
+1. Read the [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
+2. Check out [good first issues](https://github.com/def1ant1/SparkTrainer/labels/good%20first%20issue)
+3. Set up pre-commit hooks: `make setup-pre-commit`
+4. Follow our [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## 📊 Project Statistics
 
