@@ -1,0 +1,22 @@
+[core]
+    remote = storage
+    autostage = true
+
+['remote "storage"']
+    url = s3://sparktrainer-datasets
+    # For local development, you can use:
+    # url = /path/to/local/storage
+
+# Alternative remotes (uncomment and configure as needed)
+
+# Google Cloud Storage
+# ['remote "gcs"']
+#     url = gs://sparktrainer-datasets
+
+# Azure Blob Storage
+# ['remote "azure"']
+#     url = azure://sparktrainer-datasets
+
+# Local storage (for testing)
+# ['remote "local"']
+#     url = /tmp/dvc-storage
